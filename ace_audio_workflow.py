@@ -206,12 +206,12 @@ def main():
                 vae=get_value_at_index(checkpointloadersimple_40, 2),
             )
 
-                saveaudiomp3_59 = saveaudiomp3.EXECUTE_NORMALIZED(
-                    filename_prefix="generated_song_",
-                    quality="V0",
-                    audioUI="",
-                    audio=get_value_at_index(vaedecodeaudio_18, 0),
-                )
+            saveaudiomp3_59 = saveaudiomp3.EXECUTE_NORMALIZED(
+                filename_prefix="generated_song_",
+                quality="V0",
+                audioUI="",
+                audio=get_value_at_index(vaedecodeaudio_18, 0),
+            )
 
     finally:
         # Restore original directory
