@@ -87,13 +87,20 @@ def add_extra_model_paths() -> None:
 
 
 # Create argument parser at module level (BEFORE any ComfyUI imports)
-# This prevents ComfyUI's argument parser from taking over
 parser = argparse.ArgumentParser(description='ACE Audio Workflow - Song Generation')
 parser.add_argument('--tags', type=str, required=True, help='Song description tags (genre, mood, tempo, etc.)')
 parser.add_argument('--lyrics', type=str, required=True, help='Song lyrics with section markers')
 parser.add_argument('--output', type=str, required=True, help='Output directory')
 parser.add_argument('--comfyui-directory', type=str, help='ComfyUI directory (optional)')
 parser.add_argument('--queue-size', type=int, default=1, help='Queue size (default: 1)')
+
+# Parse args at module level and replace sys.argv with empty args for ComfyUI
+# This prevents ComfyUI's argument parser from seeing our custom arguments
+args = None
+if __name__ == "__main__":
+    args = parser.parse_args()
+    # Replace sys.argv so ComfyUI doesn't see our custom args
+    sys.argv = [sys.argv[0]]
 
 
 def import_custom_nodes() -> None:
@@ -122,10 +129,8 @@ def import_custom_nodes() -> None:
 
 
 def main():
-    # Parse command-line arguments FIRST (before importing ComfyUI)
-    args = parser.parse_args()
-
-    # NOW initialize ComfyUI (after args are parsed)
+    # Args are already parsed at module level
+    # Now initialize ComfyUI
     add_comfyui_directory_to_sys_path()
     add_extra_model_paths()
 
