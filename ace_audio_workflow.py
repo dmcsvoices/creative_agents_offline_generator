@@ -60,7 +60,12 @@ def add_comfyui_directory_to_sys_path() -> None:
     """
     Add 'ComfyUI' to the sys.path
     """
-    comfyui_path = find_path("ComfyUI")
+    # Use command-line argument if provided, otherwise search for it
+    if args and args.comfyui_directory:
+        comfyui_path = args.comfyui_directory
+    else:
+        comfyui_path = find_path("ComfyUI")
+
     if comfyui_path is not None and os.path.isdir(comfyui_path):
         sys.path.append(comfyui_path)
         print(f"'{comfyui_path}' added to sys.path")
@@ -130,6 +135,13 @@ def import_custom_nodes() -> None:
 
 def main():
     # Args are already parsed at module level
+    # Save original directory
+    original_dir = os.getcwd()
+
+    # Change to ComfyUI directory if specified
+    if args and args.comfyui_directory:
+        os.chdir(args.comfyui_directory)
+
     # Now initialize ComfyUI
     add_comfyui_directory_to_sys_path()
     add_extra_model_paths()
@@ -140,7 +152,6 @@ def main():
     # Change to output directory for file saving
     output_dir = os.path.abspath(args.output)
     os.makedirs(output_dir, exist_ok=True)
-    original_dir = os.getcwd()
     os.chdir(output_dir)
 
     try:
