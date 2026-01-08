@@ -1,0 +1,28 @@
+{
+  "database": {
+    "path": "/path/to/your/anthonys_musings.db",
+    "timeout": 30.0
+  },
+  "comfyui": {
+    "python": "/path/to/your/comfy_env/bin/python",
+    "comfyui_directory": "/path/to/your/ComfyUI",
+    "output_directory": "/path/to/your/output/directory",
+    "timeout_seconds": 900
+  },
+  "workflows": {
+    "image": {
+      "script": "MultimediaWorkflow/Z-Image-Turbo-Tshirt_APP.py",
+      "prompt_arg": "text7"
+    },
+    "song": {
+      "script": "MultimediaWorkflow/song_workflow_placeholder.py",
+      "prompt_arg": "lyrics_text"
+    }
+  },
+  "ui": {
+    "window_title": "Media Generator - Pending Prompts",
+    "window_width": 1200,
+    "window_height": 800,
+    "refresh_interval": 30
+  }
+}
