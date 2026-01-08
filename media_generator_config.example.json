@@ -15,8 +15,8 @@
       "prompt_arg": "text7"
     },
     "song": {
-      "script": "MultimediaWorkflow/song_workflow_placeholder.py",
-      "prompt_arg": "lyrics_text"
+      "script": "MultimediaWorkflow/ace_audio_workflow.py",
+      "prompt_arg": "tags"
     }
   },
   "ui": {

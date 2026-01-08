@@ -118,42 +118,61 @@ from nodes import NODE_CLASS_MAPPINGS
 
 
 def main():
-    import_custom_nodes()
-    with torch.inference_mode():
-        emptyacesteplatentaudio = NODE_CLASS_MAPPINGS["EmptyAceStepLatentAudio"]()
-        emptyacesteplatentaudio_17 = emptyacesteplatentaudio.EXECUTE_NORMALIZED(
-            seconds=240, batch_size=1
-        )
+    import argparse
 
-        checkpointloadersimple = NODE_CLASS_MAPPINGS["CheckpointLoaderSimple"]()
-        checkpointloadersimple_40 = checkpointloadersimple.load_checkpoint(
-            ckpt_name="ace_step_v1_3.5b.safetensors"
-        )
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='ACE Audio Workflow')
+    parser.add_argument('--tags', type=str, required=True, help='Song description tags')
+    parser.add_argument('--lyrics', type=str, required=True, help='Song lyrics with section markers')
+    parser.add_argument('--output', type=str, required=True, help='Output directory')
+    parser.add_argument('--comfyui-directory', type=str, help='ComfyUI directory (optional)')
+    parser.add_argument('--queue-size', type=int, default=1, help='Queue size (default: 1)')
 
-        latentoperationtonemapreinhard = NODE_CLASS_MAPPINGS[
-            "LatentOperationTonemapReinhard"
-        ]()
-        latentoperationtonemapreinhard_50 = (
-            latentoperationtonemapreinhard.EXECUTE_NORMALIZED(
-                multiplier=1.0000000000000002
+    args = parser.parse_args()
+
+    # Change to output directory for file saving
+    output_dir = os.path.abspath(args.output)
+    os.makedirs(output_dir, exist_ok=True)
+    original_dir = os.getcwd()
+    os.chdir(output_dir)
+
+    try:
+        import_custom_nodes()
+        with torch.inference_mode():
+            emptyacesteplatentaudio = NODE_CLASS_MAPPINGS["EmptyAceStepLatentAudio"]()
+            emptyacesteplatentaudio_17 = emptyacesteplatentaudio.EXECUTE_NORMALIZED(
+                seconds=240, batch_size=1
             )
-        )
 
-        textencodeacestepaudio = NODE_CLASS_MAPPINGS["TextEncodeAceStepAudio"]()
-        modelsamplingsd3 = NODE_CLASS_MAPPINGS["ModelSamplingSD3"]()
-        latentapplyoperationcfg = NODE_CLASS_MAPPINGS["LatentApplyOperationCFG"]()
-        conditioningzeroout = NODE_CLASS_MAPPINGS["ConditioningZeroOut"]()
-        ksampler = NODE_CLASS_MAPPINGS["KSampler"]()
-        vaedecodeaudio = NODE_CLASS_MAPPINGS["VAEDecodeAudio"]()
-        saveaudiomp3 = NODE_CLASS_MAPPINGS["SaveAudioMP3"]()
-
-        for q in range(1):
-            textencodeacestepaudio_14 = textencodeacestepaudio.EXECUTE_NORMALIZED(
-                tags="Pop Style, cartoony female vocals, \nKey: C Major (bright yet contemplative).\nTempo: Fast-paced with dynamic shifts to mirror tension.\nMood: Satirical irony mixed with melancholy, reflecting the clash of holiday cheer and wartime action.\nInstruments: Acoustic guitar for authenticity, electronic beats for pop energy, and strings to amplify emotional depth.",
-                lyrics="[Verse 1]\n 'Twas the night before Christmas, the world held its breath,\n\nAs bombs lit the sky where Santa’s sleighs tread.\n\nPresident Trump declared, 'ISIS is scum,'\n\nBut the peace of the season was shattered in fun.'\n\n[Pre-Chorus]\n'Stars blinked above as the strikes took flight,\n\nA holiday tradition of blood and fight.'\n\n[Chorus]\n'Christmas Eve bombing, the season’s delight,\n\nA strike on the terrorists, but who’s really in sight?\n\nMerry Christmas to all, including the dead,\n\nAs the world wonders, 'Was this really for us?''\n\n[Verse 2]\n'Trump’s speech rang loud in the frozen air,\n\n'Protect Christians!' he cried, but who’s really there?\n\nNigeria’s in chaos, the strikes keep on coming,\n\nWhile Santa’s reindeer chase shadows in the storm.'\n\n[Pre-Chorus]\n'Children slept soundly while drones hummed their tune,\n\nA modern-day 'Silent Night' with a twist of doom.'\n\n[Chorus]\n'Christmas Eve bombing, the season’s delight,\n\nA strike on the terrorists, but who’s really in sight?\n\nMerry Christmas to all, including the dead,\n\nAs the world wonders, 'Was this really for us?' '\n\n[Bridge]\n'Why strike on a day of peace and light?\n\nIs it justice or just political spite?\n\nThe answer’s unclear, but the bombs won’t stop—\n\nA Christmas tradition with more questions than hope.'\n[Outro]\n'Santa’s on his way, but the world’s not the same,\n\nAs the stars above shine with a bittersweet flame. '\n\n",
-                lyrics_strength=0.9900000000000002,
-                clip=get_value_at_index(checkpointloadersimple_40, 1),
+            checkpointloadersimple = NODE_CLASS_MAPPINGS["CheckpointLoaderSimple"]()
+            checkpointloadersimple_40 = checkpointloadersimple.load_checkpoint(
+                ckpt_name="ace_step_v1_3.5b.safetensors"
             )
+
+            latentoperationtonemapreinhard = NODE_CLASS_MAPPINGS[
+                "LatentOperationTonemapReinhard"
+            ]()
+            latentoperationtonemapreinhard_50 = (
+                latentoperationtonemapreinhard.EXECUTE_NORMALIZED(
+                    multiplier=1.0000000000000002
+                )
+            )
+
+            textencodeacestepaudio = NODE_CLASS_MAPPINGS["TextEncodeAceStepAudio"]()
+            modelsamplingsd3 = NODE_CLASS_MAPPINGS["ModelSamplingSD3"]()
+            latentapplyoperationcfg = NODE_CLASS_MAPPINGS["LatentApplyOperationCFG"]()
+            conditioningzeroout = NODE_CLASS_MAPPINGS["ConditioningZeroOut"]()
+            ksampler = NODE_CLASS_MAPPINGS["KSampler"]()
+            vaedecodeaudio = NODE_CLASS_MAPPINGS["VAEDecodeAudio"]()
+            saveaudiomp3 = NODE_CLASS_MAPPINGS["SaveAudioMP3"]()
+
+            for q in range(args.queue_size):
+                textencodeacestepaudio_14 = textencodeacestepaudio.EXECUTE_NORMALIZED(
+                    tags=args.tags,
+                    lyrics=args.lyrics,
+                    lyrics_strength=0.9900000000000002,
+                    clip=get_value_at_index(checkpointloadersimple_40, 1),
+                )
 
             modelsamplingsd3_51 = modelsamplingsd3.patch(
                 shift=5.000000000000001,
@@ -187,12 +206,16 @@ def main():
                 vae=get_value_at_index(checkpointloadersimple_40, 2),
             )
 
-            saveaudiomp3_59 = saveaudiomp3.EXECUTE_NORMALIZED(
-                filename_prefix="GeneratedAudio_",
-                quality="V0",
-                audioUI="",
-                audio=get_value_at_index(vaedecodeaudio_18, 0),
-            )
+                saveaudiomp3_59 = saveaudiomp3.EXECUTE_NORMALIZED(
+                    filename_prefix="generated_song_",
+                    quality="V0",
+                    audioUI="",
+                    audio=get_value_at_index(vaedecodeaudio_18, 0),
+                )
+
+    finally:
+        # Restore original directory
+        os.chdir(original_dir)
 
 
 if __name__ == "__main__":

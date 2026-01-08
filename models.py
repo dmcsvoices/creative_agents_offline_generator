@@ -161,18 +161,65 @@ class LyricsPromptData:
         """Combine all lyrics sections into single text
 
         Returns formatted lyrics with section markers:
-        [VERSE]
+        [Verse 1]
         lyrics...
 
-        [CHORUS]
+        [Chorus]
         lyrics...
         """
         lyrics_parts = []
         for section in self.structure:
-            section_type = section.get('type', '').upper()
+            section_type = section.get('type', '')
+            section_number = section.get('number', '')
             lyrics = section.get('lyrics', '')
-            lyrics_parts.append(f"[{section_type}]\n{lyrics}\n")
+
+            # Capitalize first letter of section type
+            section_type = section_type.capitalize() if section_type else ''
+
+            # Format section header with number if present
+            if section_number:
+                header = f"[{section_type} {section_number}]"
+            else:
+                header = f"[{section_type}]"
+
+            lyrics_parts.append(f"{header}\n{lyrics}\n")
+
         return "\n".join(lyrics_parts)
+
+    def get_tags_string(self) -> str:
+        """Format tags for ACE audio workflow
+
+        Combines genre, mood, tempo, key, vocal_style, and instrumentation
+        into a descriptive string suitable for the audio workflow.
+
+        Returns:
+            Formatted tags string with all musical parameters
+        """
+        tags_parts = []
+
+        if self.genre:
+            tags_parts.append(f"Genre: {self.genre}")
+
+        if self.mood:
+            tags_parts.append(f"Mood: {self.mood}")
+
+        if self.tempo:
+            tags_parts.append(f"Tempo: {self.tempo}")
+
+        if self.key:
+            tags_parts.append(f"Key: {self.key}")
+
+        if self.time_signature and self.time_signature != '4/4':
+            tags_parts.append(f"Time Signature: {self.time_signature}")
+
+        if self.vocal_style:
+            tags_parts.append(f"Vocal Style: {self.vocal_style}")
+
+        if self.instrumentation:
+            instruments_str = ", ".join(self.instrumentation)
+            tags_parts.append(f"Instrumentation: {instruments_str}")
+
+        return "\n".join(tags_parts)
 
 
 @dataclass

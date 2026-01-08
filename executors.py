@@ -222,14 +222,19 @@ class AudioWorkflowExecutor(ComfyUIWorkflowExecutor):
         # Create output directory
         output_dir = self._create_output_directory(prompt.id, 'audio')
 
+        # Get tags string (genre, mood, tempo, etc.)
+        tags_text = json_data.get_tags_string()
+
         # Get full lyrics text with section markers
         lyrics_text = json_data.get_full_lyrics()
 
-        # Build command
+        # Build command for ACE audio workflow
+        # Script expects --tags and --lyrics arguments
         cmd = [
             self.python_executable,
             str(self.workflow_script),
-            f'--{self.prompt_arg}', lyrics_text,
+            '--tags', tags_text,
+            '--lyrics', lyrics_text,
             '--output', str(output_dir),
             '--comfyui-directory', str(self.comfyui_directory),
             '--queue-size', '1'
