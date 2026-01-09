@@ -149,13 +149,16 @@ def main():
     # Import nodes AFTER ComfyUI is initialized
     from nodes import NODE_CLASS_MAPPINGS
 
-    # Change to output directory for file saving
+    # Prepare output directory (but don't change to it yet)
     output_dir = os.path.abspath(args.output)
     os.makedirs(output_dir, exist_ok=True)
-    os.chdir(output_dir)
 
     try:
+        # Import custom nodes while still in ComfyUI directory
         import_custom_nodes()
+
+        # NOW change to output directory for file saving
+        os.chdir(output_dir)
         with torch.inference_mode():
             emptyacesteplatentaudio = NODE_CLASS_MAPPINGS["EmptyAceStepLatentAudio"]()
             emptyacesteplatentaudio_17 = emptyacesteplatentaudio.EXECUTE_NORMALIZED(
@@ -224,12 +227,50 @@ def main():
                 vae=get_value_at_index(checkpointloadersimple_40, 2),
             )
 
-            saveaudiomp3_59 = saveaudiomp3.EXECUTE_NORMALIZED(
-                filename_prefix="generated_song_",
-                quality="V0",
-                audioUI="",
-                audio=get_value_at_index(vaedecodeaudio_18, 0),
-            )
+            # Save audio manually instead of using SaveAudioMP3 node
+            # which requires server context we don't have in standalone mode
+            audio_output = get_value_at_index(vaedecodeaudio_18, 0)
+
+            # Save using torchaudio first to WAV, then convert to MP3
+            import torchaudio
+            from datetime import datetime
+            from pydub import AudioSegment
+            import tempfile
+
+            # Generate filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"generated_song_{timestamp}.mp3"
+            filepath = os.path.join(output_dir, filename)
+
+            # Audio output is dict with 'waveform' and 'sample_rate'
+            waveform = audio_output['waveform']
+            sample_rate = audio_output['sample_rate']
+
+            # Ensure waveform is on CPU and has correct shape
+            if hasattr(waveform, 'cpu'):
+                waveform = waveform.cpu()
+
+            # Ensure waveform is 2D [channels, samples]
+            if waveform.dim() == 3:
+                # Remove batch dimension if present [batch, channels, samples] -> [channels, samples]
+                waveform = waveform.squeeze(0)
+            elif waveform.dim() == 1:
+                # Add channel dimension if missing [samples] -> [1, samples]
+                waveform = waveform.unsqueeze(0)
+
+            # Save as temporary WAV file first
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                temp_wav_path = temp_wav.name
+                torchaudio.save(temp_wav_path, waveform, sample_rate)
+
+            # Convert WAV to MP3 using pydub (with ffmpeg backend)
+            audio = AudioSegment.from_wav(temp_wav_path)
+            audio.export(filepath, format='mp3', bitrate='192k')
+
+            # Clean up temporary WAV file
+            os.unlink(temp_wav_path)
+
+            print(f"Audio saved to: {filepath}")
 
     finally:
         # Restore original directory
