@@ -231,15 +231,13 @@ def main():
             # which requires server context we don't have in standalone mode
             audio_output = get_value_at_index(vaedecodeaudio_18, 0)
 
-            # Save using torchaudio first to WAV, then convert to MP3
+            # Save using torchaudio
             import torchaudio
             from datetime import datetime
-            from pydub import AudioSegment
-            import tempfile
 
             # Generate filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"generated_song_{timestamp}.mp3"
+            filename = f"generated_song_{timestamp}.wav"
             filepath = os.path.join(output_dir, filename)
 
             # Audio output is dict with 'waveform' and 'sample_rate'
@@ -258,18 +256,8 @@ def main():
                 # Add channel dimension if missing [samples] -> [1, samples]
                 waveform = waveform.unsqueeze(0)
 
-            # Save as temporary WAV file first
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
-                temp_wav_path = temp_wav.name
-                torchaudio.save(temp_wav_path, waveform, sample_rate)
-
-            # Convert WAV to MP3 using pydub (with ffmpeg backend)
-            audio = AudioSegment.from_wav(temp_wav_path)
-            audio.export(filepath, format='mp3', bitrate='192k')
-
-            # Clean up temporary WAV file
-            os.unlink(temp_wav_path)
-
+            # Save as WAV file
+            torchaudio.save(filepath, waveform, sample_rate)
             print(f"Audio saved to: {filepath}")
 
     finally:
