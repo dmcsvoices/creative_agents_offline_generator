@@ -413,8 +413,6 @@ class AudioPlayer:
             song_title = "(Unknown)"
             if self.prompt_repo:
                 try:
-                    # Import here to avoid circular dependency
-                    from models import LyricsPromptData
                     import json
 
                     # Query directly from database by ID
@@ -431,13 +429,20 @@ class AudioPlayer:
                             result = cursor.fetchone()
 
                             if result:
+                                # Parse JSON and extract title directly
                                 json_data = json.loads(result[0])
-                                lyrics_data = LyricsPromptData.from_json(json_data)
-                                song_title = lyrics_data.title
+                                song_title = json_data.get('title', '(No title)')
+                                print(f"Found song title for prompt {prompt_id}: {song_title}")
+                            else:
+                                print(f"No database record found for prompt {prompt_id}")
                     except (ValueError, json.JSONDecodeError) as e:
                         print(f"Failed to parse prompt {prompt_id}: {e}")
+                        import traceback
+                        traceback.print_exc()
                 except Exception as e:
                     print(f"Failed to fetch song title for prompt {prompt_id}: {e}")
+                    import traceback
+                    traceback.print_exc()
 
             # Insert into treeview
             self.playlist.insert('', 'end', values=(f"#{prompt_id}", filename, song_title))
