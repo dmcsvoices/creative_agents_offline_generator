@@ -428,11 +428,14 @@ class AudioPlayer:
                     try:
                         prompt_id_int = int(prompt_id)
 
-                        # Query the writings table directly
+                        # Query via prompts table to get the writing content
                         with self.prompt_repo.get_connection() as conn:
                             cursor = conn.cursor()
                             cursor.execute(
-                                "SELECT content FROM writings WHERE id = ? AND type = 'lyrics'",
+                                """SELECT w.content
+                                   FROM prompts p
+                                   INNER JOIN writings w ON p.output_reference = w.id
+                                   WHERE p.id = ?""",
                                 (prompt_id_int,)
                             )
                             result = cursor.fetchone()
