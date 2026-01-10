@@ -1,0 +1,4 @@
+# UI Dependencies for Media Generator App
+Pillow>=10.0.0        # Image gallery thumbnails
+pygame>=2.5.0         # Audio playback
+numpy>=1.24.0         # Waveform analysis

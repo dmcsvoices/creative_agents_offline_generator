@@ -132,7 +132,7 @@ class ImageWorkflowExecutor(ComfyUIWorkflowExecutor):
             if result.returncode != 0:
                 error_msg = f"Workflow failed with exit code {result.returncode}"
                 if result.stderr:
-                    error_msg += f"\nStderr: {result.stderr[:500]}"
+                    error_msg += f"\nStderr: {result.stderr[-2000:]}"  # Show last 2000 chars
                 raise RuntimeError(error_msg)
 
         except subprocess.TimeoutExpired:
@@ -256,7 +256,7 @@ class AudioWorkflowExecutor(ComfyUIWorkflowExecutor):
             if result.returncode != 0:
                 error_msg = f"Workflow failed with exit code {result.returncode}"
                 if result.stderr:
-                    error_msg += f"\nStderr: {result.stderr[:500]}"
+                    error_msg += f"\nStderr: {result.stderr[-2000:]}"  # Show last 2000 chars
                 raise RuntimeError(error_msg)
 
         except subprocess.TimeoutExpired:

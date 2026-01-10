@@ -78,6 +78,9 @@ class PromptRepository:
     def get_pending_lyrics_prompts(self, limit: int = 100) -> List[PromptRecord]:
         """Query all pending lyrics prompts with their JSON content
 
+        Only returns 'lyrics_prompt' type (structured JSON format).
+        Old 'song' type prompts used raw text format incompatible with ace_audio_workflow.
+
         Args:
             limit: Maximum number of prompts to return
 
