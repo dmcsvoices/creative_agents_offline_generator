@@ -134,8 +134,13 @@ class ImageGallery:
         self.image_files = image_files
         for img_path in image_files:
             # Extract prompt number from parent directory name
-            # Path structure: output_dir/image/{prompt_id}/output.png
-            prompt_id = img_path.parent.name
+            # Path structure: output_dir/image/{prompt_id}_{timestamp}/output.png
+            # Example: 219_20260109T150634
+            dir_name = img_path.parent.name
+
+            # Extract just the prompt ID (before the first underscore)
+            prompt_id = dir_name.split('_')[0] if '_' in dir_name else dir_name
+
             display_text = f"Prompt #{prompt_id}"
             self.file_listbox.insert(tk.END, display_text)
 
@@ -405,9 +410,13 @@ class AudioPlayer:
         self.audio_files = audio_files
         for audio_file in audio_files:
             # Extract prompt number from parent directory name
-            # Path structure: output_dir/audio/{prompt_id}/output.wav
-            prompt_id = audio_file.parent.name
+            # Path structure: output_dir/audio/{prompt_id}_{timestamp}/output.wav
+            # Example: 219_20260109T150634
+            dir_name = audio_file.parent.name
             filename = audio_file.name
+
+            # Extract just the prompt ID (before the first underscore)
+            prompt_id = dir_name.split('_')[0] if '_' in dir_name else dir_name
 
             # Fetch song title from database
             song_title = "(Unknown)"
