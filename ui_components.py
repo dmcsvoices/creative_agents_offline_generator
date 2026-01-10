@@ -133,8 +133,11 @@ class ImageGallery:
         # Store files and populate listbox
         self.image_files = image_files
         for img_path in image_files:
-            # Display just filename (full path stored in self.image_files)
-            self.file_listbox.insert(tk.END, img_path.name)
+            # Extract prompt number from parent directory name
+            # Path structure: output_dir/image/{prompt_id}/output.png
+            prompt_id = img_path.parent.name
+            display_text = f"Prompt #{prompt_id}"
+            self.file_listbox.insert(tk.END, display_text)
 
         # Auto-select first image
         if self.image_files:
@@ -253,8 +256,9 @@ class ImageGallery:
 class AudioPlayer:
     """Audio player with file list and playback controls"""
 
-    def __init__(self, parent, output_dir):
+    def __init__(self, parent, output_dir, prompt_repo=None):
         self.output_dir = output_dir
+        self.prompt_repo = prompt_repo
         self.current_file = None
         self.is_playing = False
         self.audio_files = []
@@ -264,45 +268,48 @@ class AudioPlayer:
         # Main container (horizontal split)
         self.frame = tk.Frame(parent, bg=COLORS['bg_panel'])
 
-        # === LEFT: File List (~10% width) ===
-        file_list_frame = tk.Frame(self.frame, bg=COLORS['bg_panel'], width=100)
+        # === LEFT: File List (wider for more info) ===
+        file_list_frame = tk.Frame(self.frame, bg=COLORS['bg_panel'], width=450)
         file_list_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(5, 0), pady=5)
         file_list_frame.pack_propagate(False)
 
         # File list label
         list_label = tk.Label(
             file_list_frame,
-            text="Files",
+            text="Audio Files",
             bg=COLORS['bg_panel'],
             fg=COLORS['text_primary'],
             font=('Helvetica Neue', 10, 'bold')
         )
         list_label.pack(side=tk.TOP, pady=(0, 5))
 
-        # Listbox for files
-        self.playlist = tk.Listbox(
+        # Treeview for structured display
+        self.playlist = ttk.Treeview(
             file_list_frame,
-            bg=COLORS['bg_panel'],
-            fg=COLORS['text_primary'],
-            font=('Consolas', 9),
-            selectbackground=COLORS['selected'],
-            selectmode=tk.SINGLE,
-            highlightthickness=0,
-            bd=0
+            columns=('prompt', 'filename', 'title'),
+            show='headings',
+            selectmode='browse',
+            style='Solarpunk.Treeview'
         )
+
+        # Configure columns
+        self.playlist.heading('prompt', text='Prompt #')
+        self.playlist.heading('filename', text='Filename')
+        self.playlist.heading('title', text='Song Title')
+
+        self.playlist.column('prompt', width=70, minwidth=70, anchor='center')
+        self.playlist.column('filename', width=120, minwidth=100)
+        self.playlist.column('title', width=240, minwidth=150)
+
         self.playlist.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        # Horizontal scrollbar for long filenames
-        h_scroll = ttk.Scrollbar(
-            file_list_frame,
-            orient=tk.HORIZONTAL,
-            command=self.playlist.xview
-        )
-        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
-        self.playlist.configure(xscrollcommand=h_scroll.set)
+        # Scrollbars
+        v_scroll = ttk.Scrollbar(file_list_frame, orient=tk.VERTICAL, command=self.playlist.yview)
+        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.playlist.configure(yscrollcommand=v_scroll.set)
 
         # Bind selection
-        self.playlist.bind('<<ListboxSelect>>', self.on_file_select)
+        self.playlist.bind('<<TreeviewSelect>>', self.on_file_select)
 
         # === RIGHT: Controls (>90% width) ===
         right_frame = tk.Frame(self.frame, bg=COLORS['bg_panel'])
@@ -371,13 +378,14 @@ class AudioPlayer:
             print("pygame not available, using system command for audio playback")
 
     def load_playlist(self):
-        """Load audio files from output directory"""
-        self.playlist.delete(0, tk.END)
+        """Load audio files from output directory with metadata"""
+        # Clear existing
+        for item in self.playlist.get_children():
+            self.playlist.delete(item)
         self.audio_files.clear()
 
         audio_dir = Path(self.output_dir) / 'audio'
         if not audio_dir.exists():
-            self.playlist.insert(tk.END, "No audio files generated yet")
             return
 
         audio_files = []
@@ -388,33 +396,70 @@ class AudioPlayer:
                 audio_files.extend(subdir.glob('*.flac'))
 
         if not audio_files:
-            self.playlist.insert(tk.END, "No audio files generated yet")
             return
 
         # Sort by modification time (newest first)
         audio_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
-        # Store files and populate listbox
+        # Store files and populate treeview
         self.audio_files = audio_files
         for audio_file in audio_files:
-            display_name = f"{audio_file.parent.name}/{audio_file.name}"
-            self.playlist.insert(tk.END, display_name)
+            # Extract prompt number from parent directory name
+            # Path structure: output_dir/audio/{prompt_id}/output.wav
+            prompt_id = audio_file.parent.name
+            filename = audio_file.name
+
+            # Fetch song title from database
+            song_title = "(Unknown)"
+            if self.prompt_repo:
+                try:
+                    # Import here to avoid circular dependency
+                    from models import LyricsPromptData
+                    import json
+
+                    # Query directly from database by ID
+                    try:
+                        prompt_id_int = int(prompt_id)
+
+                        # Query the writings table directly
+                        with self.prompt_repo.get_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "SELECT content FROM writings WHERE id = ? AND type = 'lyrics'",
+                                (prompt_id_int,)
+                            )
+                            result = cursor.fetchone()
+
+                            if result:
+                                json_data = json.loads(result[0])
+                                lyrics_data = LyricsPromptData.from_json(json_data)
+                                song_title = lyrics_data.title
+                    except (ValueError, json.JSONDecodeError) as e:
+                        print(f"Failed to parse prompt {prompt_id}: {e}")
+                except Exception as e:
+                    print(f"Failed to fetch song title for prompt {prompt_id}: {e}")
+
+            # Insert into treeview
+            self.playlist.insert('', 'end', values=(f"#{prompt_id}", filename, song_title))
 
     def on_file_select(self, event):
-        """Handle file selection from playlist"""
-        selection = self.playlist.curselection()
+        """Handle file selection from playlist (Treeview)"""
+        selection = self.playlist.selection()
         if not selection:
             return
 
-        idx = selection[0]
-        if idx >= len(self.audio_files):
+        # Get the selected item
+        item_id = selection[0]
+        item_index = self.playlist.index(item_id)
+
+        if item_index >= len(self.audio_files):
             return
 
         # Stop current playback
         if self.is_playing:
             self.stop_playback()
 
-        self.current_file = self.audio_files[idx]
+        self.current_file = self.audio_files[item_index]
         # No waveform loading - just set current file for playback
 
     def toggle_playback(self):

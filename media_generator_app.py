@@ -486,9 +486,9 @@ class MediaGeneratorApp:
         tab3 = tk.Frame(self.main_notebook, bg=COLORS['bg_panel'])
         self.main_notebook.add(tab3, text="🎵 Audio")
 
-        # Create AudioPlayer widget (will be redesigned in ui_components.py)
+        # Create AudioPlayer widget with database access for metadata
         output_dir = self.config['comfyui']['output_directory']
-        self.audio_player = AudioPlayer(tab3, output_dir)
+        self.audio_player = AudioPlayer(tab3, output_dir, self.prompt_repo)
         self.audio_player.frame.pack(fill=tk.BOTH, expand=True)
 
         # Load playlist
