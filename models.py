@@ -8,7 +8,7 @@ Defines dataclasses for:
 - ArtifactRecord: Generated artifact metadata
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import json
@@ -23,24 +23,50 @@ class PromptRecord:
     prompt_type: str  # 'image_prompt' or 'lyrics_prompt'
     status: str  # 'completed', 'failed', etc.
     artifact_status: str  # 'pending', 'processing', 'ready', 'error'
-    output_reference: Optional[int]  # FK to writings.id
+    output_reference: Optional[int]  # FK to writings.id (backward compatibility)
     created_at: datetime
     completed_at: Optional[datetime]
     error_message: Optional[str]
-    json_content: Optional[str]  # Joined from writings.content
-    writing_id: Optional[int]  # writings.id
+
+    # Legacy single writing (for backward compatibility)
+    json_content: Optional[str] = None  # Joined from writings.content
+    writing_id: Optional[int] = None  # writings.id
+
+    # NEW: Support multiple writings
+    writings: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def primary_writing(self) -> Optional[Dict[str, Any]]:
+        """Get the primary (most recent) writing"""
+        return self.writings[-1] if self.writings else None
 
     @property
     def is_pending(self) -> bool:
         """Check if prompt is pending media generation"""
+        # Support both legacy and new structure
+        has_content = self.json_content is not None or len(self.writings) > 0
         return (
             self.status == 'completed'
             and self.artifact_status == 'pending'
-            and self.json_content is not None
+            and has_content
         )
 
     def get_json_prompt(self) -> Dict[str, Any]:
-        """Parse JSON content from writings table"""
+        """Parse JSON content from writings table
+
+        Returns primary (most recent) writing's JSON content.
+        For backward compatibility, falls back to legacy json_content field.
+        """
+        # Try new structure first
+        if self.writings:
+            primary = self.primary_writing
+            if primary and 'content' in primary:
+                try:
+                    return json.loads(primary['content'])
+                except json.JSONDecodeError:
+                    pass
+
+        # Fall back to legacy field
         if not self.json_content:
             return {}
         try:

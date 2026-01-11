@@ -37,15 +37,16 @@ class PromptRepository:
         return conn
 
     def get_pending_image_prompts(self, limit: int = 100) -> List[PromptRecord]:
-        """Query all pending image prompts with their JSON content
+        """Query all pending image prompts with ALL their writings
 
         Args:
             limit: Maximum number of prompts to return
 
         Returns:
-            List of PromptRecord objects with json_content populated
+            List of PromptRecord objects with all writings populated
         """
-        query = """
+        # First get the prompts
+        prompt_query = """
         SELECT
             p.id,
             p.prompt_text,
@@ -55,28 +56,79 @@ class PromptRepository:
             p.output_reference,
             p.created_at,
             p.completed_at,
-            p.error_message,
-            w.id as writing_id,
-            w.content as json_content
+            p.error_message
         FROM prompts p
-        INNER JOIN writings w ON p.output_reference = w.id
         WHERE p.status = 'completed'
           AND p.artifact_status = 'pending'
           AND p.prompt_type = 'image_prompt'
-          AND w.content_type = 'image_prompt'
         ORDER BY p.created_at ASC
         LIMIT ?
         """
 
+        # Then get all writings for each prompt
+        writings_query = """
+        SELECT
+            pw.writing_id,
+            pw.writing_order,
+            w.content,
+            w.content_type,
+            w.title
+        FROM prompt_writings pw
+        JOIN writings w ON pw.writing_id = w.id
+        WHERE pw.prompt_id = ?
+          AND w.content_type = 'image_prompt'
+        ORDER BY pw.writing_order ASC
+        """
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(query, (limit,))
-            rows = cursor.fetchall()
 
-            return [self._row_to_prompt_record(row) for row in rows]
+            # Get prompts
+            cursor.execute(prompt_query, (limit,))
+            prompt_rows = cursor.fetchall()
+
+            results = []
+            for prompt_row in prompt_rows:
+                prompt_id = prompt_row['id']
+
+                # Get all writings for this prompt
+                cursor.execute(writings_query, (prompt_id,))
+                writing_rows = cursor.fetchall()
+
+                # Build writings list
+                writings = []
+                for w_row in writing_rows:
+                    writings.append({
+                        'writing_id': w_row['writing_id'],
+                        'writing_order': w_row['writing_order'],
+                        'content': w_row['content'],
+                        'content_type': w_row['content_type'],
+                        'title': w_row['title']
+                    })
+
+                # Create PromptRecord
+                record = PromptRecord(
+                    id=prompt_row['id'],
+                    prompt_text=prompt_row['prompt_text'],
+                    prompt_type=prompt_row['prompt_type'],
+                    status=prompt_row['status'],
+                    artifact_status=prompt_row['artifact_status'],
+                    output_reference=prompt_row['output_reference'],
+                    created_at=self._parse_datetime(prompt_row['created_at']),
+                    completed_at=self._parse_datetime(prompt_row['completed_at']) if prompt_row['completed_at'] else None,
+                    error_message=prompt_row['error_message'],
+                    writings=writings,
+                    # Legacy fields for backward compatibility
+                    writing_id=writings[0]['writing_id'] if writings else None,
+                    json_content=writings[0]['content'] if writings else None
+                )
+
+                results.append(record)
+
+            return results
 
     def get_pending_lyrics_prompts(self, limit: int = 100) -> List[PromptRecord]:
-        """Query all pending lyrics prompts with their JSON content
+        """Query all pending lyrics prompts with ALL their writings
 
         Only returns 'lyrics_prompt' type (structured JSON format).
         Old 'song' type prompts used raw text format incompatible with ace_audio_workflow.
@@ -85,9 +137,10 @@ class PromptRepository:
             limit: Maximum number of prompts to return
 
         Returns:
-            List of PromptRecord objects with json_content populated
+            List of PromptRecord objects with all writings populated
         """
-        query = """
+        # First get the prompts
+        prompt_query = """
         SELECT
             p.id,
             p.prompt_text,
@@ -97,25 +150,76 @@ class PromptRepository:
             p.output_reference,
             p.created_at,
             p.completed_at,
-            p.error_message,
-            w.id as writing_id,
-            w.content as json_content
+            p.error_message
         FROM prompts p
-        INNER JOIN writings w ON p.output_reference = w.id
         WHERE p.status = 'completed'
           AND p.artifact_status = 'pending'
           AND p.prompt_type = 'lyrics_prompt'
-          AND w.content_type = 'lyrics_prompt'
         ORDER BY p.created_at ASC
         LIMIT ?
         """
 
+        # Then get all writings for each prompt
+        writings_query = """
+        SELECT
+            pw.writing_id,
+            pw.writing_order,
+            w.content,
+            w.content_type,
+            w.title
+        FROM prompt_writings pw
+        JOIN writings w ON pw.writing_id = w.id
+        WHERE pw.prompt_id = ?
+          AND w.content_type = 'lyrics_prompt'
+        ORDER BY pw.writing_order ASC
+        """
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(query, (limit,))
-            rows = cursor.fetchall()
 
-            return [self._row_to_prompt_record(row) for row in rows]
+            # Get prompts
+            cursor.execute(prompt_query, (limit,))
+            prompt_rows = cursor.fetchall()
+
+            results = []
+            for prompt_row in prompt_rows:
+                prompt_id = prompt_row['id']
+
+                # Get all writings for this prompt
+                cursor.execute(writings_query, (prompt_id,))
+                writing_rows = cursor.fetchall()
+
+                # Build writings list
+                writings = []
+                for w_row in writing_rows:
+                    writings.append({
+                        'writing_id': w_row['writing_id'],
+                        'writing_order': w_row['writing_order'],
+                        'content': w_row['content'],
+                        'content_type': w_row['content_type'],
+                        'title': w_row['title']
+                    })
+
+                # Create PromptRecord
+                record = PromptRecord(
+                    id=prompt_row['id'],
+                    prompt_text=prompt_row['prompt_text'],
+                    prompt_type=prompt_row['prompt_type'],
+                    status=prompt_row['status'],
+                    artifact_status=prompt_row['artifact_status'],
+                    output_reference=prompt_row['output_reference'],
+                    created_at=self._parse_datetime(prompt_row['created_at']),
+                    completed_at=self._parse_datetime(prompt_row['completed_at']) if prompt_row['completed_at'] else None,
+                    error_message=prompt_row['error_message'],
+                    writings=writings,
+                    # Legacy fields for backward compatibility
+                    writing_id=writings[0]['writing_id'] if writings else None,
+                    json_content=writings[0]['content'] if writings else None
+                )
+
+                results.append(record)
+
+            return results
 
     def update_artifact_status(
         self,
