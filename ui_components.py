@@ -429,21 +429,52 @@ class AudioPlayer:
                         prompt_id_int = int(prompt_id)
 
                         # Query via prompts table to get the writing content
+                        # Try both output_reference and junction table
                         with self.prompt_repo.get_connection() as conn:
                             cursor = conn.cursor()
+
+                            # First try output_reference (legacy single writing link)
+                            # Support both 'lyrics_prompt' (new JSON) and 'song_prompt' (old plain text)
                             cursor.execute(
-                                """SELECT w.content
+                                """SELECT w.content, w.content_type, w.title
                                    FROM prompts p
                                    INNER JOIN writings w ON p.output_reference = w.id
-                                   WHERE p.id = ?""",
+                                   WHERE p.id = ?
+                                     AND w.content_type IN ('lyrics_prompt', 'song_prompt')""",
                                 (prompt_id_int,)
                             )
                             result = cursor.fetchone()
 
+                            # If not found, try junction table (newer multi-writing support)
+                            if not result:
+                                cursor.execute(
+                                    """SELECT w.content, w.content_type, w.title
+                                       FROM prompt_writings pw
+                                       INNER JOIN writings w ON pw.writing_id = w.id
+                                       WHERE pw.prompt_id = ?
+                                         AND w.content_type IN ('lyrics_prompt', 'song_prompt')
+                                       ORDER BY pw.writing_order ASC
+                                       LIMIT 1""",
+                                    (prompt_id_int,)
+                                )
+                                result = cursor.fetchone()
+
                             if result:
-                                # Parse JSON and extract title directly
-                                json_data = json.loads(result[0])
-                                song_title = json_data.get('title', '(No title)')
+                                content, content_type, db_title = result
+
+                                # Handle new JSON format (lyrics_prompt)
+                                if content_type == 'lyrics_prompt':
+                                    try:
+                                        json_data = json.loads(content)
+                                        song_title = json_data.get('title', '(No title)')
+                                    except json.JSONDecodeError:
+                                        song_title = db_title or '(Parse error)'
+                                # Handle old plain text format (song_prompt)
+                                elif content_type == 'song_prompt':
+                                    song_title = db_title or f"Song #{prompt_id}"
+                                else:
+                                    song_title = db_title or '(Unknown format)'
+
                                 print(f"Found song title for prompt {prompt_id}: {song_title}")
                             else:
                                 print(f"No database record found for prompt {prompt_id}")

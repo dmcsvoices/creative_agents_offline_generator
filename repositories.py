@@ -27,13 +27,19 @@ class PromptRepository:
         self.db_path = db_path
 
     def get_connection(self) -> sqlite3.Connection:
-        """Create database connection with row factory
+        """Create database connection with row factory and WAL mode
 
         Returns:
             SQLite connection with row factory configured
         """
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+
+        # Enable WAL mode for concurrent access
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+
         return conn
 
     def get_pending_image_prompts(self, limit: int = 100) -> List[PromptRecord]:
@@ -46,6 +52,9 @@ class PromptRepository:
             List of PromptRecord objects with all writings populated
         """
         # First get the prompts
+        # NOTE: Only filter on artifact_status, not on status!
+        # The 'status' field is the poets service's concern (whether IT completed)
+        # The 'artifact_status' field is our concern (whether media needs generation)
         prompt_query = """
         SELECT
             p.id,
@@ -58,8 +67,7 @@ class PromptRepository:
             p.completed_at,
             p.error_message
         FROM prompts p
-        WHERE p.status = 'completed'
-          AND p.artifact_status = 'pending'
+        WHERE p.artifact_status = 'pending'
           AND p.prompt_type = 'image_prompt'
         ORDER BY p.created_at ASC
         LIMIT ?
@@ -82,6 +90,13 @@ class PromptRepository:
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
+
+            # Force checkpoint to see latest data from poets service
+            try:
+                cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except sqlite3.Error:
+                # Non-critical, continue anyway
+                pass
 
             # Get prompts
             cursor.execute(prompt_query, (limit,))
@@ -140,6 +155,9 @@ class PromptRepository:
             List of PromptRecord objects with all writings populated
         """
         # First get the prompts
+        # NOTE: Only filter on artifact_status, not on status!
+        # The 'status' field is the poets service's concern (whether IT completed)
+        # The 'artifact_status' field is our concern (whether media needs generation)
         prompt_query = """
         SELECT
             p.id,
@@ -152,8 +170,7 @@ class PromptRepository:
             p.completed_at,
             p.error_message
         FROM prompts p
-        WHERE p.status = 'completed'
-          AND p.artifact_status = 'pending'
+        WHERE p.artifact_status = 'pending'
           AND p.prompt_type = 'lyrics_prompt'
         ORDER BY p.created_at ASC
         LIMIT ?
@@ -177,9 +194,48 @@ class PromptRepository:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
+            # Force checkpoint to see latest data from poets service
+            try:
+                checkpoint_result = cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                checkpoint_info = checkpoint_result.fetchone()
+                print(f"[DEBUG] WAL checkpoint (lyrics): {checkpoint_info}")
+            except sqlite3.Error as e:
+                # Non-critical, continue anyway
+                print(f"[DEBUG] WAL checkpoint failed: {e}")
+
+            # Debug: Check total lyrics_prompt records regardless of status
+            cursor.execute("""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as status_completed,
+                       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as status_failed,
+                       SUM(CASE WHEN artifact_status = 'pending' THEN 1 ELSE 0 END) as artifact_pending,
+                       SUM(CASE WHEN artifact_status = 'ready' THEN 1 ELSE 0 END) as artifact_ready
+                FROM prompts
+                WHERE prompt_type = 'lyrics_prompt'
+            """)
+            stats = cursor.fetchone()
+            print(f"[DEBUG] Lyrics prompts in DB: total={stats['total']}")
+            print(f"        Status breakdown: completed={stats['status_completed']}, failed={stats['status_failed']}")
+            print(f"        Artifact breakdown: pending={stats['artifact_pending']}, ready={stats['artifact_ready']}")
+
+            # Debug: Show recent lyrics prompts with their statuses
+            cursor.execute("""
+                SELECT id, prompt_text, status, artifact_status, created_at
+                FROM prompts
+                WHERE prompt_type = 'lyrics_prompt'
+                ORDER BY created_at DESC
+                LIMIT 10
+            """)
+            recent = cursor.fetchall()
+            print(f"[DEBUG] Recent lyrics prompts:")
+            for r in recent:
+                print(f"  - ID={r['id']}, status='{r['status']}', artifact_status='{r['artifact_status']}', created={r['created_at']}, text='{r['prompt_text'][:50]}...'")
+
             # Get prompts
             cursor.execute(prompt_query, (limit,))
             prompt_rows = cursor.fetchall()
+
+            print(f"[DEBUG] Query returned {len(prompt_rows)} lyrics prompts matching criteria (artifact_status='pending')")
 
             results = []
             for prompt_row in prompt_rows:
@@ -188,6 +244,8 @@ class PromptRepository:
                 # Get all writings for this prompt
                 cursor.execute(writings_query, (prompt_id,))
                 writing_rows = cursor.fetchall()
+
+                print(f"[DEBUG] Prompt #{prompt_id} has {len(writing_rows)} writings")
 
                 # Build writings list
                 writings = []
@@ -253,7 +311,42 @@ class PromptRepository:
             conn.commit()
 
             # Checkpoint WAL to ensure Docker containers can see changes
-            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            try:
+                cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except sqlite3.Error:
+                # Non-critical operation - log but don't fail
+                pass
+
+    def reset_stale_processing_prompts(self, timeout_minutes: int = 30) -> int:
+        """
+        Reset prompts stuck in 'processing' status back to 'pending'.
+
+        This handles cases where the app crashed during generation.
+
+        Args:
+            timeout_minutes: How long before considering 'processing' stale
+
+        Returns:
+            Number of prompts reset
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Find prompts that have been processing for too long
+            # Use processed_at since that's when status was set to 'processing'
+            cursor.execute("""
+                UPDATE prompts
+                SET artifact_status = 'pending',
+                    error_message = 'Reset from stale processing state'
+                WHERE artifact_status = 'processing'
+                  AND processed_at IS NOT NULL
+                  AND processed_at < datetime('now', '-' || ? || ' minutes')
+            """, (timeout_minutes,))
+
+            count = cursor.rowcount
+            conn.commit()
+
+            return count
 
     def _row_to_prompt_record(self, row: sqlite3.Row) -> PromptRecord:
         """Convert database row to PromptRecord object
@@ -321,13 +414,19 @@ class ArtifactRepository:
         self.db_path = db_path
 
     def get_connection(self) -> sqlite3.Connection:
-        """Create database connection with row factory
+        """Create database connection with row factory and WAL mode
 
         Returns:
             SQLite connection with row factory configured
         """
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+
+        # Enable WAL mode for concurrent access
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+
         return conn
 
     def save_artifact(self, artifact: ArtifactRecord) -> int:
@@ -363,9 +462,72 @@ class ArtifactRepository:
             conn.commit()
 
             # Checkpoint WAL to ensure Docker containers can see changes
-            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            try:
+                cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except sqlite3.Error:
+                # Non-critical operation - log but don't fail
+                pass
 
             return cursor.lastrowid
+
+    def save_artifacts_atomic(
+        self,
+        prompt_id: int,
+        artifacts: List[ArtifactRecord],
+        final_status: str = 'ready'
+    ):
+        """
+        Atomically save all artifacts and update prompt status.
+
+        All operations succeed together or fail together (rollback on error).
+
+        Args:
+            prompt_id: Prompt ID
+            artifacts: List of ArtifactRecord objects to save
+            final_status: Final artifact_status ('ready' or 'error')
+
+        Raises:
+            Exception if transaction fails (will trigger rollback)
+        """
+        from db_utils import db_transaction
+        import json
+
+        with db_transaction(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # Step 1: Insert all artifacts
+            for artifact in artifacts:
+                cursor.execute("""
+                    INSERT INTO prompt_artifacts (
+                        prompt_id,
+                        artifact_type,
+                        file_path,
+                        preview_path,
+                        metadata,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, (
+                    artifact.prompt_id,
+                    artifact.artifact_type,
+                    artifact.file_path,
+                    artifact.preview_path,
+                    json.dumps(artifact.metadata) if artifact.metadata else None
+                ))
+
+            # Step 2: Update status to final state
+            cursor.execute("""
+                UPDATE prompts
+                SET artifact_status = ?
+                WHERE id = ?
+            """, (final_status, prompt_id))
+
+            # All operations succeed together (auto-commits)
+            # Or all fail together (auto-rollback)
+
+        # Checkpoint after successful transaction
+        from db_utils import force_wal_checkpoint
+        force_wal_checkpoint(self.db_path, mode="RESTART")
 
     def get_artifacts_for_prompt(self, prompt_id: int) -> List[ArtifactRecord]:
         """Get all artifacts for a specific prompt

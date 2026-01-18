@@ -19,6 +19,7 @@ import json
 import subprocess
 import threading
 import queue
+import time
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 from typing import Optional
@@ -49,6 +50,201 @@ COLORS = {
 }
 
 
+class SplashScreen:
+    """Splash screen with solarpunk theme that displays for 5 seconds"""
+
+    def __init__(self, parent):
+        self.splash = tk.Toplevel(parent)
+        self.splash.overrideredirect(True)  # Remove window decorations
+
+        # Set window size
+        window_width = 600
+        window_height = 400
+
+        # Center the splash screen on the screen
+        screen_width = self.splash.winfo_screenwidth()
+        screen_height = self.splash.winfo_screenheight()
+        center_x = int(screen_width/2 - window_width/2)
+        center_y = int(screen_height/2 - window_height/2)
+
+        self.splash.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
+        self.splash.configure(bg=COLORS['bg_primary'])
+
+        # Create main frame
+        main_frame = tk.Frame(self.splash, bg=COLORS['bg_primary'])
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # Title
+        title_label = tk.Label(
+            main_frame,
+            text="MEDIA GENERATOR",
+            font=('Helvetica Neue', 32, 'bold'),
+            fg=COLORS['accent_solar'],
+            bg=COLORS['bg_primary']
+        )
+        title_label.pack(pady=(30, 10))
+
+        subtitle_label = tk.Label(
+            main_frame,
+            text="Solarpunk Edition",
+            font=('Helvetica Neue', 18),
+            fg=COLORS['text_light'],
+            bg=COLORS['bg_primary']
+        )
+        subtitle_label.pack(pady=(0, 30))
+
+        # Animated elements
+        self.canvas = tk.Canvas(
+            main_frame,
+            width=300,
+            height=150,
+            bg=COLORS['bg_primary'],
+            highlightthickness=0
+        )
+        self.canvas.pack(pady=20)
+
+        # Draw solarpunk elements
+        self.draw_solarpunk_elements()
+
+        # Loading text
+        self.loading_label = tk.Label(
+            main_frame,
+            text="Initializing...",
+            font=('Helvetica Neue', 14),
+            fg=COLORS['text_light'],
+            bg=COLORS['bg_primary']
+        )
+        self.loading_label.pack(pady=10)
+
+        # Progress bar
+        self.progress_var = tk.DoubleVar()
+        progress_bar = ttk.Progressbar(
+            main_frame,
+            variable=self.progress_var,
+            maximum=100,
+            length=300,
+            mode='determinate'
+        )
+        progress_bar.pack(pady=10)
+
+        # Version info
+        version_label = tk.Label(
+            main_frame,
+            text="v1.0.0",
+            font=('Helvetica Neue', 10),
+            fg=COLORS['text_light'],
+            bg=COLORS['bg_primary']
+        )
+        version_label.pack(pady=(30, 0))
+
+        # Start animation
+        self.animation_step = 0
+        self.animate_elements()
+
+        # Start progress simulation
+        self.progress_step = 0
+        self.update_progress()
+
+        # Close splash after 10 seconds
+        self.splash.after(10000, self.close_splash)
+
+    def draw_solarpunk_elements(self):
+        """Draw solarpunk-themed elements on canvas"""
+        # Draw sun-like circle
+        self.canvas.create_oval(100, 30, 200, 130,
+                               fill=COLORS['accent_solar'],
+                               outline=COLORS['accent_warm'],
+                               width=2)
+
+        # Draw leaves/organic shapes
+        self.canvas.create_arc(50, 50, 100, 100,
+                              start=30, extent=120,
+                              style=tk.ARC,
+                              outline=COLORS['bg_light'],
+                              width=3)
+
+        self.canvas.create_arc(200, 50, 250, 100,
+                              start=150, extent=120,
+                              style=tk.ARC,
+                              outline=COLORS['bg_light'],
+                              width=3)
+
+        # Draw organic patterns
+        self.canvas.create_line(80, 100, 120, 80,
+                               fill=COLORS['bg_light'],
+                               width=2)
+
+        self.canvas.create_line(180, 80, 220, 100,
+                               fill=COLORS['bg_light'],
+                               width=2)
+
+        # Draw small circles representing nodes
+        self.canvas.create_oval(70, 70, 80, 80,
+                               fill=COLORS['accent_warm'],
+                               outline=COLORS['bg_primary'])
+
+        self.canvas.create_oval(220, 70, 230, 80,
+                               fill=COLORS['accent_warm'],
+                               outline=COLORS['bg_primary'])
+
+    def animate_elements(self):
+        """Animate elements on the splash screen"""
+        # Simple animation to rotate or pulse elements
+        self.animation_step += 1
+
+        # Clear canvas and redraw with slight variations
+        self.canvas.delete("all")
+        self.draw_solarpunk_elements()
+
+        # Add pulsing effect to sun
+        pulse_offset = abs(5 - (self.animation_step % 10))
+        # Calculate hex value for dynamic solar yellow
+        green_val = min(255, 0x3D + pulse_offset)
+        sun_fill = f'#FFD9{green_val:02X}'  # Dynamic solar yellow
+
+        # Redraw sun with pulsing effect
+        self.canvas.create_oval(100, 30, 200, 130,
+                               fill=sun_fill,
+                               outline=COLORS['accent_warm'],
+                               width=2)
+
+        # Schedule next animation frame
+        self.splash.after(100, self.animate_elements)
+
+    def update_progress(self):
+        """Simulate progress update"""
+        self.progress_step += 1
+        progress_percent = min(100, self.progress_step)  # Will reach 100% in 10 seconds (updating every 100ms for 100 steps)
+        self.progress_var.set(progress_percent)
+
+        # Update loading text periodically
+        if self.progress_step % 20 == 0:  # Update every 2 seconds (20 * 100ms = 2000ms)
+            texts = [
+                "Initializing...",
+                "Loading resources...",
+                "Preparing interface...",
+                "Building connections...",
+                "Almost ready...",
+                "Starting application..."
+            ]
+            current_text = texts[(self.progress_step // 20) % len(texts)]
+            self.loading_label.config(text=current_text)
+
+        if self.progress_step < 100:  # Continue updating for 10 seconds
+            self.splash.after(100, self.update_progress)
+
+    def close_splash(self):
+        """Close the splash screen"""
+        self.splash.destroy()
+
+    def wait_for_close(self):
+        """Wait for the splash screen to close"""
+        while self.splash.winfo_exists():
+            self.splash.update_idletasks()
+            self.splash.update()
+            time.sleep(0.01)
+
+
 class GenerationTask:
     """Represents a single generation task"""
     def __init__(self, task_id, prompt_type, prompt, total_in_batch, position_in_batch):
@@ -62,11 +258,12 @@ class GenerationTask:
 class MediaGeneratorApp:
     """Main tkinter application window for media generation"""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, root: Optional[tk.Tk] = None):
         """Initialize application with configuration
 
         Args:
             config: Configuration dictionary
+            root: Optional existing Tk root window. If None, creates a new one.
         """
         self.config = config
 
@@ -75,12 +272,17 @@ class MediaGeneratorApp:
         self.prompt_repo = PromptRepository(db_path)
         self.artifact_repo = ArtifactRepository(db_path)
 
+        # Reset any stale processing prompts from previous crashes
+        stale_count = self.prompt_repo.reset_stale_processing_prompts(timeout_minutes=30)
+        if stale_count > 0:
+            print(f"✓ Reset {stale_count} stale prompts from previous session")
+
         # State
         self.selected_prompt: Optional[PromptRecord] = None
         self.selected_prompt_type: Optional[str] = None  # 'image_prompt' or 'lyrics_prompt'
 
-        # Create main window
-        self.root = tk.Tk()
+        # Create or use existing main window
+        self.root = root if root is not None else tk.Tk()
         self.root.title(config['ui']['window_title'])
         self.root.geometry(
             f"{config['ui']['window_width']}x{config['ui']['window_height']}"
@@ -354,6 +556,22 @@ class MediaGeneratorApp:
         self.filter_combo.pack(side=tk.LEFT, padx=5)
         self.filter_combo.bind('<<ComboboxSelected>>', lambda e: self.refresh_unified_list())
 
+        # Clear button (remove from display only)
+        tk.Button(
+            filter_frame,
+            text="Clear",
+            command=self.clear_selected,
+            bg=COLORS['bg_secondary'],
+            fg=COLORS['text_light'],
+            font=('Helvetica Neue', 10),
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=0,
+            padx=15,
+            pady=5,
+            cursor='hand2'
+        ).pack(side=tk.RIGHT, padx=5)
+
         # Refresh button
         tk.Button(
             filter_frame,
@@ -518,6 +736,7 @@ class MediaGeneratorApp:
         )
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Refresh", command=self.refresh_unified_list, accelerator="Cmd+R")
+        file_menu.add_command(label="Force Checkpoint & Refresh", command=self.force_database_checkpoint, accelerator="Cmd+Shift+R")
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit, accelerator="Cmd+Q")
 
@@ -560,6 +779,24 @@ class MediaGeneratorApp:
         'lyrics_prompt': '🎵',  # Musical note
     }
 
+    def force_database_checkpoint(self):
+        """Force WAL checkpoint to see latest data from poets service"""
+        try:
+            from db_utils import force_wal_checkpoint
+            db_path = self.config['database']['path']
+
+            print(f"Forcing WAL checkpoint...")
+            if force_wal_checkpoint(db_path, mode="TRUNCATE"):
+                print("✓ WAL checkpoint successful")
+                messagebox.showinfo("Success", "Database checkpoint completed.\nNow refreshing prompts...")
+                self.refresh_unified_list()
+            else:
+                print("⚠️ WAL checkpoint failed (database may be busy)")
+                messagebox.showwarning("Warning", "Checkpoint partially completed.\nTrying refresh anyway...")
+                self.refresh_unified_list()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to checkpoint: {e}")
+
     def refresh_unified_list(self):
         """Reload unified prompts list from database"""
         # Clear existing items
@@ -569,9 +806,16 @@ class MediaGeneratorApp:
             # Get filter value
             filter_value = self.filter_var.get()
 
+            print("\n" + "=" * 80)
+            print(f"REFRESHING PROMPTS LIST (filter={filter_value})")
+            print("=" * 80)
+
             # Load both prompt types
+            print(f"[DEBUG] Querying for pending prompts...")
             image_prompts = self.prompt_repo.get_pending_image_prompts() if filter_value in ["All", "Images"] else []
             lyrics_prompts = self.prompt_repo.get_pending_lyrics_prompts() if filter_value in ["All", "Audio"] else []
+            print(f"[DEBUG] Query results: {len(image_prompts)} image prompts, {len(lyrics_prompts)} lyrics prompts")
+            print("=" * 80 + "\n")
 
             # Combine into unified list with type info
             all_prompts = []
@@ -674,6 +918,39 @@ class MediaGeneratorApp:
         formatted_json = json.dumps(json_data, indent=2)
 
         self.details_text.insert('1.0', formatted_json)
+
+    def clear_selected(self):
+        """Remove selected prompts from display (does not affect database)
+
+        The prompts remain in the database and will reappear when Refresh is clicked.
+        """
+        selections = self.unified_tree.selection()
+
+        if not selections:
+            messagebox.showinfo("No Selection", "Please select one or more prompts to clear from the display.")
+            return
+
+        # Confirm action
+        count = len(selections)
+        response = messagebox.askyesno(
+            "Clear from Display",
+            f"Remove {count} prompt(s) from the display?\n\n"
+            "The prompts will remain in the database and can be restored by clicking Refresh."
+        )
+
+        if response:
+            # Remove items from tree
+            for item_id in selections:
+                self.unified_tree.delete(item_id)
+
+            # Clear selection state
+            self.selected_prompt = None
+            self.selected_prompt_type = None
+            self.details_text.delete('1.0', tk.END)
+
+            # Update status
+            self.update_status(f"Cleared {count} prompt(s) from display", 'ready')
+            self.update_status_bar()
 
     def generate_selected(self):
         """Queue selected prompts for background generation"""
@@ -858,20 +1135,31 @@ class MediaGeneratorApp:
         # Parse JSON data
         json_data = ImagePromptData.from_json(prompt.get_json_prompt())
 
-        # Execute workflow
-        executor = ImageWorkflowExecutor(self.config)
-        artifacts = executor.generate(
-            prompt,
-            json_data,
-            progress_callback=lambda msg: None  # Silent
-        )
+        try:
+            # Execute workflow
+            executor = ImageWorkflowExecutor(self.config)
+            artifacts = executor.generate(
+                prompt,
+                json_data,
+                progress_callback=lambda msg: None  # Silent
+            )
 
-        # Save artifacts to database
-        for artifact in artifacts:
-            self.artifact_repo.save_artifact(artifact)
+            # Atomically save all artifacts + update status
+            self.artifact_repo.save_artifacts_atomic(
+                prompt_id=prompt.id,
+                artifacts=artifacts,
+                final_status='ready'
+            )
 
-        # Update status to ready
-        self.prompt_repo.update_artifact_status(prompt.id, 'ready')
+        except Exception as e:
+            # On error, mark as error
+            # Note: If exception happened during atomic save, artifacts were rolled back
+            self.prompt_repo.update_artifact_status(
+                prompt.id,
+                'error',
+                error_message=str(e)
+            )
+            raise
 
     def generate_image_prompt(self, prompt: PromptRecord):
         """Execute image generation workflow (with user feedback)
@@ -920,20 +1208,31 @@ class MediaGeneratorApp:
         # Parse JSON data
         json_data = LyricsPromptData.from_json(prompt.get_json_prompt())
 
-        # Execute workflow
-        executor = AudioWorkflowExecutor(self.config)
-        artifacts = executor.generate(
-            prompt,
-            json_data,
-            progress_callback=lambda msg: None  # Silent
-        )
+        try:
+            # Execute workflow
+            executor = AudioWorkflowExecutor(self.config)
+            artifacts = executor.generate(
+                prompt,
+                json_data,
+                progress_callback=lambda msg: None  # Silent
+            )
 
-        # Save artifacts to database
-        for artifact in artifacts:
-            self.artifact_repo.save_artifact(artifact)
+            # Atomically save all artifacts + update status
+            self.artifact_repo.save_artifacts_atomic(
+                prompt_id=prompt.id,
+                artifacts=artifacts,
+                final_status='ready'
+            )
 
-        # Update status to ready
-        self.prompt_repo.update_artifact_status(prompt.id, 'ready')
+        except Exception as e:
+            # On error, mark as error
+            # Note: If exception happened during atomic save, artifacts were rolled back
+            self.prompt_repo.update_artifact_status(
+                prompt.id,
+                'error',
+                error_message=str(e)
+            )
+            raise
 
     def generate_lyrics_prompt(self, prompt: PromptRecord):
         """Execute audio generation workflow (with user feedback)
@@ -1059,6 +1358,13 @@ class MediaGeneratorApp:
 
 def main():
     """Application entry point"""
+    # Create root window first (required for proper tkinter hierarchy)
+    root = tk.Tk()
+    root.withdraw()  # Hide it initially
+
+    # Show splash screen as a Toplevel of root
+    splash = SplashScreen(root)
+
     # Determine config path
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
@@ -1071,6 +1377,8 @@ def main():
         print()
         print("Please ensure media_generator_config.json exists in the same directory")
         print("as this script.")
+        splash.close_splash()
+        root.destroy()
         return 1
 
     # Load configuration
@@ -1078,6 +1386,8 @@ def main():
         config = load_config(config_path)
     except Exception as e:
         print(f"ERROR: Failed to load configuration: {e}")
+        splash.close_splash()
+        root.destroy()
         return 1
 
     # Validate configuration
@@ -1089,6 +1399,8 @@ def main():
             print(f"  - {issue}")
         print()
         print("Please fix the configuration issues and try again.")
+        splash.close_splash()  # Close splash if there's an error
+        root.destroy()
         return 1
 
     print("Configuration validated successfully")
@@ -1100,13 +1412,17 @@ def main():
 
     # Launch application
     try:
-        app = MediaGeneratorApp(config)
+        app = MediaGeneratorApp(config, root)  # Pass existing root
+        splash.close_splash()  # Close splash screen before showing main app
+        root.deiconify()  # Show the main window
         app.run()
         return 0
     except Exception as e:
         print(f"ERROR: Application failed to start: {e}")
         import traceback
         traceback.print_exc()
+        splash.close_splash()  # Make sure splash is closed in case of error
+        root.destroy()
         return 1
 
 

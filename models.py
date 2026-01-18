@@ -42,12 +42,16 @@ class PromptRecord:
 
     @property
     def is_pending(self) -> bool:
-        """Check if prompt is pending media generation"""
+        """Check if prompt is pending media generation
+
+        Only checks artifact_status, not status!
+        The 'status' field is the poets service's concern.
+        The 'artifact_status' field determines if media needs generation.
+        """
         # Support both legacy and new structure
         has_content = self.json_content is not None or len(self.writings) > 0
         return (
-            self.status == 'completed'
-            and self.artifact_status == 'pending'
+            self.artifact_status == 'pending'
             and has_content
         )
 

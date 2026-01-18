@@ -228,6 +228,19 @@ class AudioWorkflowExecutor(ComfyUIWorkflowExecutor):
         # Get full lyrics text with section markers
         lyrics_text = json_data.get_full_lyrics()
 
+        # Log the formatted arguments for debugging
+        print("=" * 80)
+        print(f"AUDIO WORKFLOW ARGUMENTS - Prompt #{prompt.id}")
+        print("=" * 80)
+        print(f"\n📋 TAGS ARGUMENT (length={len(tags_text)} chars):")
+        print("-" * 80)
+        print(tags_text)
+        print("-" * 80)
+        print(f"\n🎵 LYRICS ARGUMENT (length={len(lyrics_text)} chars):")
+        print("-" * 80)
+        print(lyrics_text)
+        print("-" * 80)
+
         # Build command for ACE audio workflow
         # Script expects --tags and --lyrics arguments
         cmd = [
@@ -239,6 +252,19 @@ class AudioWorkflowExecutor(ComfyUIWorkflowExecutor):
             '--comfyui-directory', str(self.comfyui_directory),
             '--queue-size', '1'
         ]
+
+        print(f"\n🚀 EXECUTING COMMAND:")
+        print("-" * 80)
+        # Print command in a readable format
+        print(f"Python: {self.python_executable}")
+        print(f"Script: {self.workflow_script}")
+        print(f"--tags: {tags_text[:100]}{'...' if len(tags_text) > 100 else ''}")
+        print(f"--lyrics: {lyrics_text[:100]}{'...' if len(lyrics_text) > 100 else ''}")
+        print(f"--output: {output_dir}")
+        print(f"--comfyui-directory: {self.comfyui_directory}")
+        print(f"--queue-size: 1")
+        print("-" * 80)
+        print()
 
         if progress_callback:
             progress_callback(f"Starting audio generation for prompt #{prompt.id}")
@@ -252,6 +278,28 @@ class AudioWorkflowExecutor(ComfyUIWorkflowExecutor):
                 text=True,
                 timeout=self.timeout_seconds
             )
+
+            # Log subprocess output for debugging
+            print(f"\n✅ WORKFLOW EXECUTION COMPLETED - Prompt #{prompt.id}")
+            print("-" * 80)
+            print(f"Return code: {result.returncode}")
+
+            if result.stdout:
+                print(f"\n📤 STDOUT (length={len(result.stdout)} chars):")
+                print("-" * 40)
+                # Show last 1000 chars of stdout
+                print(result.stdout[-1000:] if len(result.stdout) > 1000 else result.stdout)
+                print("-" * 40)
+
+            if result.stderr:
+                print(f"\n⚠️  STDERR (length={len(result.stderr)} chars):")
+                print("-" * 40)
+                # Show last 1000 chars of stderr
+                print(result.stderr[-1000:] if len(result.stderr) > 1000 else result.stderr)
+                print("-" * 40)
+
+            print("=" * 80)
+            print()
 
             if result.returncode != 0:
                 error_msg = f"Workflow failed with exit code {result.returncode}"
