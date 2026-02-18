@@ -1078,7 +1078,7 @@ class MediaGeneratorApp:
         print(f"Generation error for prompt #{task.prompt.id}: {error_msg}")
 
         try:
-            self.prompt_repo.update_artifact_status(task.prompt.id, 'error', error_msg[:500])
+            self.prompt_repo.update_artifact_status(task.prompt.id, 'error', error_msg[:2000])
         except Exception as e:
             print(f"Failed to update error status: {e}")
 
@@ -1151,14 +1151,7 @@ class MediaGeneratorApp:
                 final_status='ready'
             )
 
-        except Exception as e:
-            # On error, mark as error
-            # Note: If exception happened during atomic save, artifacts were rolled back
-            self.prompt_repo.update_artifact_status(
-                prompt.id,
-                'error',
-                error_message=str(e)
-            )
+        except Exception:
             raise
 
     def generate_image_prompt(self, prompt: PromptRecord):
@@ -1224,14 +1217,7 @@ class MediaGeneratorApp:
                 final_status='ready'
             )
 
-        except Exception as e:
-            # On error, mark as error
-            # Note: If exception happened during atomic save, artifacts were rolled back
-            self.prompt_repo.update_artifact_status(
-                prompt.id,
-                'error',
-                error_message=str(e)
-            )
+        except Exception:
             raise
 
     def generate_lyrics_prompt(self, prompt: PromptRecord):

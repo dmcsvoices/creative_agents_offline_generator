@@ -15,6 +15,20 @@ from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 from models import PromptRecord, ImagePromptData, LyricsPromptData, ArtifactRecord
 
+_LOG_PATH = Path(__file__).parent / 'generation_errors.log'
+
+
+def _write_generation_log(prompt_id: int, result) -> None:
+    """Append subprocess result to persistent log file for post-mortem debugging."""
+    with open(_LOG_PATH, 'a') as log_file:
+        log_file.write(f"\n{'='*80}\n")
+        log_file.write(f"Prompt #{prompt_id} — {datetime.now().isoformat()}\n")
+        log_file.write(f"Return code: {result.returncode}\n")
+        if result.stderr:
+            log_file.write(f"STDERR:\n{result.stderr}\n")
+        if result.returncode != 0 and result.stdout:
+            log_file.write(f"STDOUT:\n{result.stdout}\n")
+
 
 class ComfyUIWorkflowExecutor:
     """Base class for executing ComfyUI workflows via subprocess"""
@@ -121,6 +135,12 @@ class ImageWorkflowExecutor(ComfyUIWorkflowExecutor):
 
         # Execute subprocess
         try:
+            print(f"\n🚀 EXECUTING IMAGE WORKFLOW - Prompt #{prompt.id}")
+            print("-" * 80)
+            print(f"Command: {' '.join(cmd)}")
+            print(f"Working directory: {self.comfyui_directory}")
+            print("-" * 80)
+
             result = subprocess.run(
                 cmd,
                 cwd=str(self.comfyui_directory),
@@ -129,10 +149,35 @@ class ImageWorkflowExecutor(ComfyUIWorkflowExecutor):
                 timeout=self.timeout_seconds
             )
 
+            print(f"\n✅ IMAGE WORKFLOW COMPLETED - Prompt #{prompt.id}")
+            print("-" * 80)
+            print(f"Return code: {result.returncode}")
+
+            if result.stdout:
+                print(f"\n📤 STDOUT (length={len(result.stdout)} chars):")
+                print("-" * 40)
+                # Show last 2000 chars of stdout
+                print(result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout)
+                print("-" * 40)
+
+            if result.stderr:
+                print(f"\n⚠️  STDERR (length={len(result.stderr)} chars):")
+                print("-" * 40)
+                # Show FULL stderr for debugging
+                print(result.stderr)
+                print("-" * 40)
+
+            print("=" * 80)
+            print()
+
+            _write_generation_log(prompt.id, result)
+
             if result.returncode != 0:
                 error_msg = f"Workflow failed with exit code {result.returncode}"
                 if result.stderr:
                     error_msg += f"\nStderr: {result.stderr[-2000:]}"  # Show last 2000 chars
+                if result.stdout:
+                    error_msg += f"\nStdout: {result.stdout[-1000:]}"  # Also include some stdout
                 raise RuntimeError(error_msg)
 
         except subprocess.TimeoutExpired:
@@ -300,6 +345,8 @@ class AudioWorkflowExecutor(ComfyUIWorkflowExecutor):
 
             print("=" * 80)
             print()
+
+            _write_generation_log(prompt.id, result)
 
             if result.returncode != 0:
                 error_msg = f"Workflow failed with exit code {result.returncode}"

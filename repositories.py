@@ -12,7 +12,57 @@ import sqlite3
 import json
 from typing import List, Optional
 from datetime import datetime
+from contextlib import contextmanager
 from models import PromptRecord, ArtifactRecord
+
+
+@contextmanager
+def managed_connection(db_path: str, timeout: float = 30.0):
+    """
+    Context manager that properly closes SQLite connections.
+
+    SQLite's native context manager only commits/rollbacks transactions,
+    it does NOT close connections. This context manager ensures connections
+    are always closed, preventing connection leaks.
+
+    Args:
+        db_path: Path to SQLite database file
+        timeout: Connection timeout in seconds
+
+    Yields:
+        sqlite3.Connection: Configured database connection
+
+    Example:
+        with managed_connection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM table")
+            # Connection is automatically closed after this block
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path, timeout=timeout)
+        conn.row_factory = sqlite3.Row
+
+        # Enable WAL mode for concurrent access
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+
+        yield conn
+
+        # Commit any pending transactions
+        conn.commit()
+
+    except Exception as e:
+        # Rollback on error
+        if conn:
+            conn.rollback()
+        raise
+
+    finally:
+        # CRITICAL: Always close the connection to prevent leaks
+        if conn:
+            conn.close()
 
 
 class PromptRepository:
@@ -26,21 +76,19 @@ class PromptRepository:
         """
         self.db_path = db_path
 
-    def get_connection(self) -> sqlite3.Connection:
-        """Create database connection with row factory and WAL mode
+    def get_connection(self):
+        """
+        Create database connection context manager that properly closes connections.
+
+        IMPORTANT: Use with 'with' statement to ensure connection is closed:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT ...")
 
         Returns:
-            SQLite connection with row factory configured
+            Context manager that yields configured SQLite connection
         """
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-
-        # Enable WAL mode for concurrent access
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-
-        return conn
+        return managed_connection(self.db_path)
 
     def get_pending_image_prompts(self, limit: int = 100) -> List[PromptRecord]:
         """Query all pending image prompts with ALL their writings
@@ -195,8 +243,9 @@ class PromptRepository:
             cursor = conn.cursor()
 
             # Force checkpoint to see latest data from poets service
+            # Use PASSIVE mode to avoid blocking writers (prevents corruption)
             try:
-                checkpoint_result = cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                checkpoint_result = cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
                 checkpoint_info = checkpoint_result.fetchone()
                 print(f"[DEBUG] WAL checkpoint (lyrics): {checkpoint_info}")
             except sqlite3.Error as e:
@@ -413,21 +462,19 @@ class ArtifactRepository:
         """
         self.db_path = db_path
 
-    def get_connection(self) -> sqlite3.Connection:
-        """Create database connection with row factory and WAL mode
+    def get_connection(self):
+        """
+        Create database connection context manager that properly closes connections.
+
+        IMPORTANT: Use with 'with' statement to ensure connection is closed:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT ...")
 
         Returns:
-            SQLite connection with row factory configured
+            Context manager that yields configured SQLite connection
         """
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-
-        # Enable WAL mode for concurrent access
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-
-        return conn
+        return managed_connection(self.db_path)
 
     def save_artifact(self, artifact: ArtifactRecord) -> int:
         """Insert artifact record into database
