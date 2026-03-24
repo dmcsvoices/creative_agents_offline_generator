@@ -499,7 +499,11 @@ class MediaGeneratorApp:
         tab1 = tk.Frame(self.main_notebook, bg=COLORS['bg_panel'])
         self.main_notebook.add(tab1, text="⚙ Prompts")
 
-        # Vertical PanedWindow (resizable split)
+        # FIXED BOTTOM: Generate button — must be packed BEFORE the expanding
+        # PanedWindow so tkinter reserves its space first.
+        self._create_generate_button(tab1)
+
+        # Vertical PanedWindow (resizable split) — fills remaining space
         tab1_paned = tk.PanedWindow(
             tab1,
             orient=tk.VERTICAL,
@@ -514,12 +518,9 @@ class MediaGeneratorApp:
         prompts_section = self._create_prompts_section(tab1_paned)
         tab1_paned.add(prompts_section, minsize=200)
 
-        # BOTTOM: JSON viewer
+        # BOTTOM: JSON / Audio Params notebook
         json_section = self._create_json_section(tab1_paned)
         tab1_paned.add(json_section, minsize=100)
-
-        # FIXED BOTTOM: Generate button
-        self._create_generate_button(tab1)
 
     def _create_prompts_section(self, parent):
         """Create prompts list with filter"""
