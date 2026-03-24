@@ -247,7 +247,8 @@ class AudioWorkflowExecutor(ComfyUIWorkflowExecutor):
         self,
         prompt: PromptRecord,
         json_data: LyricsPromptData,
-        progress_callback: Optional[Callable[[str], None]] = None
+        progress_callback: Optional[Callable[[str], None]] = None,
+        audio_params: Optional[Dict[str, Any]] = None
     ) -> List[ArtifactRecord]:
         """Execute audio workflow and return artifact records
 
@@ -298,6 +299,24 @@ class AudioWorkflowExecutor(ComfyUIWorkflowExecutor):
             '--queue-size', '1'
         ]
 
+        # Append optional ACE 1.5 generation parameters from GUI panel
+        if audio_params:
+            _param_flags = {
+                'bpm':          '--bpm',
+                'duration':     '--duration',
+                'timesignature':'--timesignature',
+                'keyscale':     '--keyscale',
+                'language':     '--language',
+                'cfg_scale':    '--cfg-scale',
+                'temperature':  '--temperature',
+                'top_p':        '--top-p',
+                'top_k':        '--top-k',
+                'min_p':        '--min-p',
+            }
+            for key, flag in _param_flags.items():
+                if key in audio_params:
+                    cmd.extend([flag, str(audio_params[key])])
+
         print(f"\n🚀 EXECUTING COMMAND:")
         print("-" * 80)
         # Print command in a readable format
@@ -308,6 +327,8 @@ class AudioWorkflowExecutor(ComfyUIWorkflowExecutor):
         print(f"--output: {output_dir}")
         print(f"--comfyui-directory: {self.comfyui_directory}")
         print(f"--queue-size: 1")
+        if audio_params:
+            print(f"Audio params overrides: {audio_params}")
         print("-" * 80)
         print()
 

@@ -247,12 +247,13 @@ class SplashScreen:
 
 class GenerationTask:
     """Represents a single generation task"""
-    def __init__(self, task_id, prompt_type, prompt, total_in_batch, position_in_batch):
+    def __init__(self, task_id, prompt_type, prompt, total_in_batch, position_in_batch, audio_params=None):
         self.task_id = task_id
         self.prompt_type = prompt_type
         self.prompt = prompt
         self.total_in_batch = total_in_batch
         self.position_in_batch = position_in_batch
+        self.audio_params = audio_params  # Optional dict of ACE 1.5 generation params
 
 
 class MediaGeneratorApp:
@@ -665,13 +666,23 @@ class MediaGeneratorApp:
         return json_frame
 
     def _create_generate_button(self, parent):
-        """Create generate button at bottom of prompts tab"""
-        button_frame = tk.Frame(parent, bg=COLORS['bg_secondary'], height=50)
-        button_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=5)
-        button_frame.pack_propagate(False)
+        """Create bottom area: collapsible audio params panel + generate button"""
+        # Outer container holds both the params panel and the button
+        self._bottom_area = tk.Frame(parent, bg=COLORS['bg_secondary'])
+        self._bottom_area.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=5)
+
+        # Build audio params panel inside the bottom area (initially hidden)
+        self._build_audio_params_panel(self._bottom_area)
+
+        # Generate button row (always visible)
+        self._generate_button_row = tk.Frame(
+            self._bottom_area, bg=COLORS['bg_secondary'], height=50
+        )
+        self._generate_button_row.pack(fill=tk.X)
+        self._generate_button_row.pack_propagate(False)
 
         self.generate_button = tk.Button(
-            button_frame,
+            self._generate_button_row,
             text="Generate Selected",
             command=self.generate_selected,
             bg=COLORS['accent_solar'],
@@ -685,6 +696,181 @@ class MediaGeneratorApp:
             cursor='hand2'
         )
         self.generate_button.pack(expand=True)
+
+    # ── Audio params defaults ──────────────────────────────────────────────────
+    _AUDIO_DEFAULTS = {
+        'bpm': 190, 'duration': 120, 'keyscale': 'E minor',
+        'timesignature': '4', 'language': 'en', 'cfg_scale': 2.0,
+        'temperature': 0.85, 'top_p': 0.9, 'top_k': 0, 'min_p': 0.0,
+    }
+    _KEY_SCALE_OPTIONS = [
+        'C major', 'D major', 'E major', 'F major', 'G major', 'A major', 'B major',
+        'C minor', 'D minor', 'E minor', 'F minor', 'G minor', 'A minor', 'B minor',
+        'C# major', 'Eb major', 'F# major', 'Ab major', 'Bb major',
+        'C# minor', 'Eb minor', 'F# minor', 'Ab minor', 'Bb minor',
+    ]
+
+    def _build_audio_params_panel(self, parent):
+        """Build the Audio Generation Parameters collapsible panel.
+
+        Stores widget vars on self for later read-back.  The frame is created
+        but NOT packed here — call _show_audio_params_panel / _hide_audio_params_panel.
+        """
+        self.audio_params_frame = ttk.LabelFrame(
+            parent,
+            text="  Audio Generation Parameters (ACE Step 1.5)  ",
+            style='Solarpunk.TLabelframe'
+        )
+
+        inner = tk.Frame(self.audio_params_frame, bg=COLORS['bg_primary'])
+        inner.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
+
+        # ── tk variables (read back in _get_audio_params) ──────────────────
+        d = self._AUDIO_DEFAULTS
+        self._ap_bpm          = tk.IntVar(value=d['bpm'])
+        self._ap_duration     = tk.IntVar(value=d['duration'])
+        self._ap_keyscale     = tk.StringVar(value=d['keyscale'])
+        self._ap_timesig      = tk.StringVar(value=d['timesignature'])
+        self._ap_language     = tk.StringVar(value=d['language'])
+        self._ap_cfg_scale    = tk.DoubleVar(value=d['cfg_scale'])
+        self._ap_temperature  = tk.DoubleVar(value=d['temperature'])
+        self._ap_top_p        = tk.DoubleVar(value=d['top_p'])
+        self._ap_top_k        = tk.IntVar(value=d['top_k'])
+        self._ap_min_p        = tk.DoubleVar(value=d['min_p'])
+
+        # ── shared widget styles ───────────────────────────────────────────
+        lbl_kw = dict(bg=COLORS['bg_primary'], fg=COLORS['text_light'],
+                      font=('Helvetica Neue', 10), anchor='e')
+        spinbox_kw = dict(bg=COLORS['bg_panel'], fg=COLORS['text_primary'],
+                          relief=tk.FLAT, highlightthickness=1,
+                          highlightbackground=COLORS['border'],
+                          font=('Helvetica Neue', 10), width=7)
+        combo_kw = dict(style='Solarpunk.TCombobox', state='normal')
+
+        def lbl(row, col, text):
+            tk.Label(inner, text=text, **lbl_kw).grid(
+                row=row, column=col, sticky='e', padx=(10, 4), pady=4)
+
+        def spinbox(row, col, var, lo, hi, inc=1, fmt=None):
+            kw = dict(textvariable=var, from_=lo, to=hi, increment=inc, **spinbox_kw)
+            if fmt:
+                kw['format'] = fmt
+            tk.Spinbox(inner, **kw).grid(row=row, column=col, sticky='w', padx=(0, 8))
+
+        # ── Row 0: BPM | Duration ──────────────────────────────────────────
+        lbl(0, 0, 'BPM:')
+        spinbox(0, 1, self._ap_bpm, 40, 320)
+
+        lbl(0, 2, 'Duration (s):')
+        spinbox(0, 3, self._ap_duration, 15, 300)
+
+        # ── Row 1: Key/Scale | Time Signature ─────────────────────────────
+        lbl(1, 0, 'Key / Scale:')
+        ttk.Combobox(inner, textvariable=self._ap_keyscale, width=14,
+                     values=self._KEY_SCALE_OPTIONS, **combo_kw).grid(
+            row=1, column=1, sticky='w', padx=(0, 8), pady=4)
+
+        lbl(1, 2, 'Time Signature:')
+        ttk.Combobox(inner, textvariable=self._ap_timesig, width=5,
+                     values=['3', '4', '6', '12'], state='readonly',
+                     style='Solarpunk.TCombobox').grid(
+            row=1, column=3, sticky='w', padx=(0, 8), pady=4)
+
+        # ── Row 2: CFG Scale | Language ───────────────────────────────────
+        lbl(2, 0, 'CFG Scale:')
+        spinbox(2, 1, self._ap_cfg_scale, 0.5, 15.0, inc=0.5, fmt='%4.1f')
+
+        lbl(2, 2, 'Language:')
+        ttk.Combobox(inner, textvariable=self._ap_language, width=5,
+                     values=['en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'pt', 'ru'],
+                     state='readonly', style='Solarpunk.TCombobox').grid(
+            row=2, column=3, sticky='w', padx=(0, 8), pady=4)
+
+        # ── Row 3: Temperature | Top P ────────────────────────────────────
+        lbl(3, 0, 'Temperature:')
+        spinbox(3, 1, self._ap_temperature, 0.05, 2.0, inc=0.05, fmt='%4.2f')
+
+        lbl(3, 2, 'Top P:')
+        spinbox(3, 3, self._ap_top_p, 0.0, 1.0, inc=0.05, fmt='%4.2f')
+
+        # ── Row 4: Top K | Min P ──────────────────────────────────────────
+        lbl(4, 0, 'Top K:')
+        spinbox(4, 1, self._ap_top_k, 0, 500)
+
+        lbl(4, 2, 'Min P:')
+        spinbox(4, 3, self._ap_min_p, 0.0, 1.0, inc=0.05, fmt='%4.2f')
+
+        # ── Row 5: Reset button ───────────────────────────────────────────
+        tk.Button(
+            inner, text='Reset Defaults',
+            command=self._reset_audio_params,
+            bg=COLORS['bg_secondary'], fg=COLORS['text_light'],
+            font=('Helvetica Neue', 9), relief=tk.FLAT,
+            bd=0, highlightthickness=0, padx=12, pady=3, cursor='hand2'
+        ).grid(row=5, column=0, columnspan=4, pady=(6, 2))
+
+        # Grid column weights: labels narrow, widgets wider
+        inner.columnconfigure(0, weight=0, minsize=110)
+        inner.columnconfigure(1, weight=1)
+        inner.columnconfigure(2, weight=0, minsize=120)
+        inner.columnconfigure(3, weight=1)
+
+    def _show_audio_params_panel(self):
+        """Show the audio params panel above the generate button."""
+        if not self.audio_params_frame.winfo_ismapped():
+            self.audio_params_frame.pack(
+                fill=tk.X, before=self._generate_button_row, padx=5, pady=(4, 2)
+            )
+
+    def _hide_audio_params_panel(self):
+        """Hide the audio params panel."""
+        if self.audio_params_frame.winfo_ismapped():
+            self.audio_params_frame.pack_forget()
+
+    def _reset_audio_params(self):
+        """Restore all audio param widgets to their factory defaults."""
+        d = self._AUDIO_DEFAULTS
+        self._ap_bpm.set(d['bpm'])
+        self._ap_duration.set(d['duration'])
+        self._ap_keyscale.set(d['keyscale'])
+        self._ap_timesig.set(d['timesignature'])
+        self._ap_language.set(d['language'])
+        self._ap_cfg_scale.set(d['cfg_scale'])
+        self._ap_temperature.set(d['temperature'])
+        self._ap_top_p.set(d['top_p'])
+        self._ap_top_k.set(d['top_k'])
+        self._ap_min_p.set(d['min_p'])
+
+    def _populate_audio_params_from_prompt(self, json_data: dict):
+        """Pre-fill audio params from the selected prompt's metadata where available."""
+        meta = json_data.get('metadata', {})
+
+        # Key → keyscale
+        key = meta.get('key', '')
+        if key:
+            self._ap_keyscale.set(key)
+
+        # Time signature → extract numerator (e.g. "4/4" → "4", "3/4" → "3")
+        time_sig = meta.get('time_signature', '')
+        if time_sig:
+            numerator = time_sig.split('/')[0].strip()
+            if numerator in ('3', '4', '6', '12'):
+                self._ap_timesig.set(numerator)
+
+    def _get_audio_params(self) -> dict:
+        """Read current audio param widget values and return as a dict."""
+        return {
+            'bpm':          self._ap_bpm.get(),
+            'duration':     self._ap_duration.get(),
+            'keyscale':     self._ap_keyscale.get(),
+            'timesignature':self._ap_timesig.get(),
+            'language':     self._ap_language.get(),
+            'cfg_scale':    round(self._ap_cfg_scale.get(), 2),
+            'temperature':  round(self._ap_temperature.get(), 2),
+            'top_p':        round(self._ap_top_p.get(), 2),
+            'top_k':        self._ap_top_k.get(),
+            'min_p':        round(self._ap_min_p.get(), 2),
+        }
 
     def _create_image_gallery_tab(self):
         """Create Tab 2: Image Gallery"""
@@ -871,6 +1057,7 @@ class MediaGeneratorApp:
             self.generate_button.config(text="Generate Selected", state=tk.DISABLED)
             self.selected_prompt = None
             self.selected_prompt_type = None
+            self._hide_audio_params_panel()
             return
         elif count == 1:
             self.generate_button.config(text="Generate Selected", state=tk.NORMAL)
@@ -903,6 +1090,13 @@ class MediaGeneratorApp:
                 self.selected_prompt = prompt
                 self.selected_prompt_type = prompt_type
                 self.display_prompt_details(prompt)
+
+                # Show/hide audio params panel and populate from prompt data
+                if prompt_type == 'lyrics_prompt':
+                    self._populate_audio_params_from_prompt(prompt.get_json_prompt())
+                    self._show_audio_params_panel()
+                else:
+                    self._hide_audio_params_panel()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load prompt details:\n{str(e)}")
 
@@ -998,6 +1192,9 @@ class MediaGeneratorApp:
         self.current_batch_success = 0
         self.current_batch_errors = 0
 
+        # Snapshot audio params once for the whole batch (captured at queue time)
+        batch_audio_params = self._get_audio_params()
+
         # Queue all tasks
         for idx, (prompt_type, prompt) in enumerate(prompts_to_generate, 1):
             task = GenerationTask(
@@ -1005,7 +1202,8 @@ class MediaGeneratorApp:
                 prompt_type=prompt_type,
                 prompt=prompt,
                 total_in_batch=len(prompts_to_generate),
-                position_in_batch=idx
+                position_in_batch=idx,
+                audio_params=batch_audio_params if prompt_type == 'lyrics_prompt' else None
             )
             self.task_queue.put(task)
 
@@ -1039,7 +1237,7 @@ class MediaGeneratorApp:
                     if task.prompt_type == 'image_prompt':
                         self._generate_image_prompt_silent(task.prompt)
                     elif task.prompt_type == 'lyrics_prompt':
-                        self._generate_lyrics_prompt_silent(task.prompt)
+                        self._generate_lyrics_prompt_silent(task.prompt, audio_params=task.audio_params)
 
                     # Success - schedule UI update
                     self.root.after(0, self._on_task_success, task)
@@ -1189,11 +1387,12 @@ class MediaGeneratorApp:
             self.update_status(f"Error: {error_msg[:100]}", 'error')
             messagebox.showerror("Generation Failed", error_msg)
 
-    def _generate_lyrics_prompt_silent(self, prompt: PromptRecord):
+    def _generate_lyrics_prompt_silent(self, prompt: PromptRecord, audio_params: dict = None):
         """Execute audio generation workflow (silent, no dialogs)
 
         Args:
             prompt: PromptRecord to generate
+            audio_params: Optional dict of ACE 1.5 generation parameters from GUI panel
         """
         # Update status to processing
         self.prompt_repo.update_artifact_status(prompt.id, 'processing')
@@ -1207,7 +1406,8 @@ class MediaGeneratorApp:
             artifacts = executor.generate(
                 prompt,
                 json_data,
-                progress_callback=lambda msg: None  # Silent
+                progress_callback=lambda msg: None,  # Silent
+                audio_params=audio_params
             )
 
             # Atomically save all artifacts + update status
