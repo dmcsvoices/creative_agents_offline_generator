@@ -638,16 +638,19 @@ class MediaGeneratorApp:
         return prompts_container
 
     def _create_json_section(self, parent):
-        """Create JSON viewer section"""
-        json_frame = ttk.LabelFrame(
-            parent,
-            text="Prompt Details (JSON)",
-            style='Solarpunk.TLabelframe'
-        )
+        """Create details section: JSON viewer + Audio Params as notebook tabs."""
+        # Wrapper frame that sits inside the PanedWindow pane
+        section_frame = tk.Frame(parent, bg=COLORS['bg_primary'])
 
-        # ScrolledText for JSON display
+        self.details_notebook = ttk.Notebook(section_frame, style='Solarpunk.TNotebook')
+        self.details_notebook.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        # ── Tab 0: JSON viewer ───────────────────────────────────────────────
+        json_tab = tk.Frame(self.details_notebook, bg=COLORS['bg_panel'])
+        self.details_notebook.add(json_tab, text="  Details (JSON)  ")
+
         self.details_text = scrolledtext.ScrolledText(
-            json_frame,
+            json_tab,
             wrap=tk.WORD,
             font=('Consolas', 11),
             bg=COLORS['bg_panel'],
@@ -659,30 +662,24 @@ class MediaGeneratorApp:
             highlightthickness=0,
             padx=10,
             pady=10,
-            height=10
         )
-        self.details_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.details_text.pack(fill=tk.BOTH, expand=True)
 
-        return json_frame
+        # ── Tab 1: Audio generation parameters ──────────────────────────────
+        audio_tab = tk.Frame(self.details_notebook, bg=COLORS['bg_primary'])
+        self.details_notebook.add(audio_tab, text="  Audio Params (ACE 1.5)  ")
+        self._build_audio_params_panel(audio_tab)
+
+        return section_frame
 
     def _create_generate_button(self, parent):
-        """Create bottom area: collapsible audio params panel + generate button"""
-        # Outer container holds both the params panel and the button
-        self._bottom_area = tk.Frame(parent, bg=COLORS['bg_secondary'])
-        self._bottom_area.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=5)
-
-        # Build audio params panel inside the bottom area (initially hidden)
-        self._build_audio_params_panel(self._bottom_area)
-
-        # Generate button row (always visible)
-        self._generate_button_row = tk.Frame(
-            self._bottom_area, bg=COLORS['bg_secondary'], height=50
-        )
-        self._generate_button_row.pack(fill=tk.X)
-        self._generate_button_row.pack_propagate(False)
+        """Create generate button at bottom of prompts tab."""
+        button_frame = tk.Frame(parent, bg=COLORS['bg_secondary'], height=50)
+        button_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=5)
+        button_frame.pack_propagate(False)
 
         self.generate_button = tk.Button(
-            self._generate_button_row,
+            button_frame,
             text="Generate Selected",
             command=self.generate_selected,
             bg=COLORS['accent_solar'],
@@ -711,18 +708,8 @@ class MediaGeneratorApp:
     ]
 
     def _build_audio_params_panel(self, parent):
-        """Build the Audio Generation Parameters collapsible panel.
-
-        Stores widget vars on self for later read-back.  The frame is created
-        but NOT packed here — call _show_audio_params_panel / _hide_audio_params_panel.
-        """
-        self.audio_params_frame = ttk.LabelFrame(
-            parent,
-            text="  Audio Generation Parameters (ACE Step 1.5)  ",
-            style='Solarpunk.TLabelframe'
-        )
-
-        inner = tk.Frame(self.audio_params_frame, bg=COLORS['bg_primary'])
+        """Build the Audio Generation Parameters widget grid into the given parent frame."""
+        inner = tk.Frame(parent, bg=COLORS['bg_primary'])
         inner.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
 
         # ── tk variables (read back in _get_audio_params) ──────────────────
@@ -816,16 +803,12 @@ class MediaGeneratorApp:
         inner.columnconfigure(3, weight=1)
 
     def _show_audio_params_panel(self):
-        """Show the audio params panel above the generate button."""
-        if not self.audio_params_frame.winfo_ismapped():
-            self.audio_params_frame.pack(
-                fill=tk.X, before=self._generate_button_row, padx=5, pady=(4, 2)
-            )
+        """Switch details notebook to the Audio Params tab."""
+        self.details_notebook.select(1)
 
     def _hide_audio_params_panel(self):
-        """Hide the audio params panel."""
-        if self.audio_params_frame.winfo_ismapped():
-            self.audio_params_frame.pack_forget()
+        """Switch details notebook to the JSON tab."""
+        self.details_notebook.select(0)
 
     def _reset_audio_params(self):
         """Restore all audio param widgets to their factory defaults."""
