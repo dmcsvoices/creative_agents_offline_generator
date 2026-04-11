@@ -27,11 +27,13 @@ COLORS = {
 class ImageGallery:
     """Image gallery with file list and single full-size image viewer"""
 
-    def __init__(self, parent, output_dir):
+    def __init__(self, parent, output_dir, on_export=None, on_promote=None):
         self.output_dir = output_dir
         self.image_files = []
         self.current_photo = None
         self.current_image_path = None
+        self._on_export = on_export
+        self._on_promote = on_promote
 
         # Main frame (horizontal split)
         self.frame = tk.Frame(parent, bg=COLORS['bg_panel'])
@@ -41,7 +43,6 @@ class ImageGallery:
         file_list_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(5, 0), pady=5)
         file_list_frame.pack_propagate(False)
 
-        # File list label
         list_label = tk.Label(
             file_list_frame,
             text="Files",
@@ -51,7 +52,6 @@ class ImageGallery:
         )
         list_label.pack(side=tk.TOP, pady=(0, 5))
 
-        # Listbox for files
         self.file_listbox = tk.Listbox(
             file_list_frame,
             bg=COLORS['bg_panel'],
@@ -64,7 +64,6 @@ class ImageGallery:
         )
         self.file_listbox.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        # Horizontal scrollbar for long filenames
         h_scroll = ttk.Scrollbar(
             file_list_frame,
             orient=tk.HORIZONTAL,
@@ -73,23 +72,62 @@ class ImageGallery:
         h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.file_listbox.configure(xscrollcommand=h_scroll.set)
 
-        # Bind selection
         self.file_listbox.bind('<<ListboxSelect>>', self.on_file_select)
 
-        # === RIGHT: Image Display (>90% width) ===
+        # === RIGHT: canvas + action button bar ===
+        right_frame = tk.Frame(self.frame, bg=COLORS['bg_panel'])
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        # Action bar (pack FIRST so canvas gets the remaining space)
+        action_frame = tk.Frame(right_frame, bg=COLORS['bg_panel'])
+        action_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=(0, 5))
+
+        self.export_btn = tk.Button(
+            action_frame, text="💾 Export Image…",
+            command=self._handle_export,
+            bg=COLORS['bg_secondary'], fg=COLORS['text_light'],
+            font=('Helvetica Neue', 10), relief=tk.FLAT, bd=0,
+            highlightthickness=0, padx=14, pady=6, cursor='hand2',
+            state=tk.DISABLED,
+        )
+        self.export_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.promote_btn = tk.Button(
+            action_frame, text="⬆ Promote to Web",
+            command=self._handle_promote,
+            bg=COLORS['accent_warm'], fg=COLORS['text_primary'],
+            font=('Helvetica Neue', 10), relief=tk.FLAT, bd=0,
+            highlightthickness=0, padx=14, pady=6, cursor='hand2',
+            state=tk.DISABLED,
+        )
+        self.promote_btn.pack(side=tk.LEFT)
+
+        tk.Label(
+            action_frame,
+            text="Double-click image to open in system viewer",
+            bg=COLORS['bg_panel'], fg=COLORS['text_primary'],
+            font=('Helvetica Neue', 9),
+        ).pack(side=tk.RIGHT, padx=8)
+
+        # Image canvas
         self.image_canvas = tk.Canvas(
-            self.frame,
+            right_frame,
             bg='#1a1a1a',
             highlightthickness=0,
             bd=0
         )
-        self.image_canvas.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.image_canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=(5, 0))
 
-        # Bind resize to redraw image
         self.image_canvas.bind('<Configure>', self._on_canvas_resize)
-
-        # Bind double-click to open in system viewer
         self.image_canvas.bind('<Double-Button-1>', self._on_double_click)
+
+    def _handle_export(self):
+        if self.current_image_path and self._on_export:
+            self._on_export(self.current_image_path)
+
+    def _handle_promote(self):
+        if self.current_image_path and self._on_promote:
+            self._on_promote(self.current_image_path)
 
     def _on_canvas_resize(self, event):
         """Redraw image when canvas is resized"""
@@ -109,6 +147,8 @@ class ImageGallery:
         self.image_files.clear()
         self.current_photo = None
         self.current_image_path = None
+        self.export_btn.config(state=tk.DISABLED)
+        self.promote_btn.config(state=tk.DISABLED)
 
         # Find all image files in output_dir/image/
         image_dir = Path(self.output_dir) / 'image'
@@ -217,6 +257,8 @@ class ImageGallery:
 
             # Store current path for resize and double-click
             self.current_image_path = image_path
+            self.export_btn.config(state=tk.NORMAL)
+            self.promote_btn.config(state=tk.NORMAL)
 
         except Exception as e:
             print(f"Failed to display image {image_path}: {e}")
@@ -261,10 +303,12 @@ class ImageGallery:
 class AudioPlayer:
     """Audio player with file list and playback controls"""
 
-    def __init__(self, parent, output_dir, prompt_repo=None):
+    def __init__(self, parent, output_dir, prompt_repo=None, on_export=None, on_promote=None):
         self.output_dir = output_dir
         self.prompt_repo = prompt_repo
         self.current_file = None
+        self._on_export = on_export
+        self._on_promote = on_promote
         self.is_playing = False
         self.audio_files = []
         self.audio_backend = None
@@ -368,8 +412,37 @@ class AudioPlayer:
         )
         self.time_label.pack(side=tk.RIGHT, padx=10)
 
+        # Export / Promote buttons (right of stop, left of time)
+        self.promote_btn = tk.Button(
+            controls_frame, text="⬆ Promote to Web",
+            command=self._handle_promote,
+            bg=COLORS['accent_warm'], fg=COLORS['text_primary'],
+            font=('Helvetica Neue', 10), relief=tk.FLAT, bd=0,
+            highlightthickness=0, padx=14, pady=6, cursor='hand2',
+            state=tk.DISABLED,
+        )
+        self.promote_btn.pack(side=tk.LEFT, padx=(12, 4))
+
+        self.export_btn = tk.Button(
+            controls_frame, text="💾 Export Audio…",
+            command=self._handle_export,
+            bg=COLORS['bg_secondary'], fg=COLORS['text_light'],
+            font=('Helvetica Neue', 10), relief=tk.FLAT, bd=0,
+            highlightthickness=0, padx=14, pady=6, cursor='hand2',
+            state=tk.DISABLED,
+        )
+        self.export_btn.pack(side=tk.LEFT, padx=4)
+
         # Initialize audio backend
         self._init_audio_backend()
+
+    def _handle_export(self):
+        if self.current_file and self._on_export:
+            self._on_export(self.current_file)
+
+    def _handle_promote(self):
+        if self.current_file and self._on_promote:
+            self._on_promote(self.current_file)
 
     def _init_audio_backend(self):
         """Initialize audio playback backend"""
@@ -508,7 +581,8 @@ class AudioPlayer:
             self.stop_playback()
 
         self.current_file = self.audio_files[item_index]
-        # No waveform loading - just set current file for playback
+        self.export_btn.config(state=tk.NORMAL)
+        self.promote_btn.config(state=tk.NORMAL)
 
     def toggle_playback(self):
         """Play or pause audio"""

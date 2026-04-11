@@ -26,7 +26,7 @@ from typing import Optional
 
 # Import local modules
 from config import load_config, validate_config
-from models import PromptRecord, ImagePromptData, LyricsPromptData
+from models import PromptRecord, ImagePromptData, LyricsPromptData, ArtifactRecord
 from repositories import PromptRepository, ArtifactRepository
 from executors import ImageWorkflowExecutor, AudioWorkflowExecutor
 from ui_components import ImageGallery, AudioPlayer
@@ -939,12 +939,13 @@ class MediaGeneratorApp:
         tab2 = tk.Frame(self.main_notebook, bg=COLORS['bg_panel'])
         self.main_notebook.add(tab2, text="📷 Images")
 
-        # Create ImageGallery widget (will be redesigned in ui_components.py)
         output_dir = self.config['comfyui']['output_directory']
-        self.image_gallery = ImageGallery(tab2, output_dir)
+        self.image_gallery = ImageGallery(
+            tab2, output_dir,
+            on_export=self._export_file,
+            on_promote=lambda p: self._promote_file(p, 'image'),
+        )
         self.image_gallery.frame.pack(fill=tk.BOTH, expand=True)
-
-        # Load images
         self.image_gallery.load_images()
 
     def _create_audio_gallery_tab(self):
@@ -952,12 +953,13 @@ class MediaGeneratorApp:
         tab3 = tk.Frame(self.main_notebook, bg=COLORS['bg_panel'])
         self.main_notebook.add(tab3, text="🎵 Audio")
 
-        # Create AudioPlayer widget with database access for metadata
         output_dir = self.config['comfyui']['output_directory']
-        self.audio_player = AudioPlayer(tab3, output_dir, self.prompt_repo)
+        self.audio_player = AudioPlayer(
+            tab3, output_dir, self.prompt_repo,
+            on_export=self._export_file,
+            on_promote=lambda p: self._promote_file(p, 'audio'),
+        )
         self.audio_player.frame.pack(fill=tk.BOTH, expand=True)
-
-        # Load playlist
         self.audio_player.load_playlist()
 
 
@@ -1633,6 +1635,129 @@ class MediaGeneratorApp:
         )
 
     # ─────────────────────────────────────────────────────────────────────────
+    # SHARED EXPORT / PROMOTE HANDLERS  (called from Image and Audio viewers)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _export_file(self, file_path):
+        """Copy the currently selected viewer artifact to a user-chosen location."""
+        import shutil
+        from tkinter import filedialog
+        from pathlib import Path
+
+        file_path = Path(file_path)
+        if not file_path.exists():
+            messagebox.showerror("File Not Found", f"Cannot find:\n{file_path}")
+            return
+
+        ext = file_path.suffix.lower()
+        if ext in ('.wav', '.mp3', '.flac'):
+            filetypes = [("Audio files", f"*{ext}"), ("All files", "*.*")]
+        else:
+            filetypes = [("Image files", f"*{ext}"), ("All files", "*.*")]
+
+        dest = filedialog.asksaveasfilename(
+            title="Export to…",
+            defaultextension=ext,
+            initialfile=file_path.name,
+            filetypes=filetypes,
+        )
+        if not dest:
+            return
+
+        try:
+            shutil.copy2(file_path, dest)
+            self.update_status(f"Exported → {dest}", 'success')
+            messagebox.showinfo("Export Complete", f"Saved to:\n{dest}")
+        except Exception as e:
+            messagebox.showerror("Export Failed", str(e))
+
+    def _promote_file(self, file_path, artifact_type: str):
+        """Promote the currently selected viewer artifact into prompt_artifacts.
+
+        Parses the prompt_id from the directory name, checks whether the file
+        is already in the database, and inserts a new prompt_artifacts row if not.
+        """
+        from pathlib import Path
+        from datetime import datetime
+
+        file_path = Path(file_path)
+        output_root = Path(self.config['comfyui']['output_directory'])
+
+        # Parse prompt_id from directory name: "{prompt_id}_{timestamp}"
+        dir_name = file_path.parent.name
+        try:
+            prompt_id = int(dir_name.split('_')[0])
+        except (ValueError, IndexError):
+            messagebox.showerror(
+                "Cannot Promote",
+                f"Could not determine prompt ID from path:\n{file_path}\n\n"
+                "Expected directory name like '219_20260109T150634'."
+            )
+            return
+
+        # Relative path for DB storage
+        try:
+            relative_path = str(file_path.relative_to(output_root))
+        except ValueError:
+            messagebox.showerror(
+                "Cannot Promote",
+                f"File is outside the configured output directory:\n{file_path}"
+            )
+            return
+
+        # Check if this exact file is already in prompt_artifacts
+        existing = self.artifact_repo.get_artifacts_for_prompt(prompt_id)
+        if any(a.file_path == relative_path for a in existing):
+            messagebox.showinfo(
+                "Already in Database",
+                f"This file is already recorded in the database for prompt #{prompt_id}.\n"
+                "The web app is already serving it."
+            )
+            return
+
+        confirmed = messagebox.askyesno(
+            "Promote to Web App",
+            f"Add this file to the database for prompt #{prompt_id}?\n\n"
+            f"File: {file_path.name}\n\n"
+            "The web app will serve this file going forward.\n"
+            "The previous file (if any) remains on disk.",
+        )
+        if not confirmed:
+            return
+
+        try:
+            artifact = ArtifactRecord(
+                id=None,
+                prompt_id=prompt_id,
+                artifact_type=artifact_type,
+                file_path=relative_path,
+                preview_path=relative_path if artifact_type == 'image' else None,
+                metadata={
+                    'file_name': file_path.name,
+                    'file_size': file_path.stat().st_size,
+                    'promoted_from_viewer': True,
+                    'generated_at': datetime.fromtimestamp(
+                        file_path.stat().st_mtime).isoformat(),
+                },
+            )
+            self.artifact_repo.promote_artifact(prompt_id, artifact)
+
+            if hasattr(self, 'history_tree'):
+                self._load_history()
+
+            self.update_status(
+                f"Promoted prompt #{prompt_id} artifact — web app now serves the new file.",
+                'success'
+            )
+            messagebox.showinfo(
+                "Promoted",
+                f"File recorded in database for prompt #{prompt_id}.\n"
+                "The web browse page will now serve this file."
+            )
+        except Exception as e:
+            messagebox.showerror("Promote Failed", str(e))
+
+    # ─────────────────────────────────────────────────────────────────────────
     # HISTORY TAB
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -1656,30 +1781,9 @@ class MediaGeneratorApp:
         )
         self.history_regen_btn.pack(side=tk.LEFT, padx=(10, 5), pady=8)
 
-        self.history_export_btn = tk.Button(
-            btn_frame, text="💾 Export...",
-            command=self._export_history_artifact,
-            bg=COLORS['bg_light'], fg=COLORS['text_primary'],
-            font=('Helvetica Neue', 11),
-            relief=tk.FLAT, bd=0, highlightthickness=0,
-            padx=16, pady=10, cursor='hand2', state=tk.DISABLED,
-        )
-        self.history_export_btn.pack(side=tk.LEFT, padx=5, pady=8)
-
-        self.history_promote_btn = tk.Button(
-            btn_frame, text="⬆ Promote to Web",
-            command=self._promote_history_artifact,
-            bg=COLORS['accent_warm'], fg=COLORS['text_primary'],
-            font=('Helvetica Neue', 11),
-            relief=tk.FLAT, bd=0, highlightthickness=0,
-            padx=16, pady=10, cursor='hand2', state=tk.DISABLED,
-        )
-        self.history_promote_btn.pack(side=tk.LEFT, padx=5, pady=8)
-
-        # Promote tooltip note
         tk.Label(
             btn_frame,
-            text="Promote writes to DB so the web app can serve it",
+            text="After regeneration, use Export or Promote in the 🖼 Images / 🎵 Audio tab",
             bg=COLORS['bg_secondary'], fg=COLORS['text_light'],
             font=('Helvetica Neue', 9),
         ).pack(side=tk.LEFT, padx=10)
@@ -1899,23 +2003,8 @@ class MediaGeneratorApp:
     def _update_history_buttons(self):
         """Enable/disable History tab buttons based on current state"""
         has_selection = self.history_selected_prompt is not None
-        has_regen = len(self.history_last_regen_artifacts) > 0
-
         self.history_regen_btn.config(
             state=tk.NORMAL if (has_selection and not self.is_generating) else tk.DISABLED
-        )
-        # Export: available after a regen OR if the prompt already has DB artifacts
-        can_export = has_regen
-        if not can_export and has_selection:
-            existing = self.artifact_repo.get_artifacts_for_prompt(
-                self.history_selected_prompt.id)
-            can_export = len(existing) > 0
-        self.history_export_btn.config(
-            state=tk.NORMAL if can_export else tk.DISABLED
-        )
-        # Promote: only available after a sandbox regen (not yet in DB)
-        self.history_promote_btn.config(
-            state=tk.NORMAL if has_regen else tk.DISABLED
         )
 
     def _regenerate_history_selected(self):
@@ -1993,110 +2082,20 @@ class MediaGeneratorApp:
         self._update_history_buttons()
 
         label = 'image' if task.prompt_type == 'image_prompt' else 'audio'
+        viewer = 'Images' if label == 'image' else 'Audio'
         n = len(task.regen_artifacts)
         self.update_status(
-            f"Regenerated {n} {label} file(s) for prompt #{task.prompt.id} "
-            f"— visible in viewer tab. Use Export or Promote as needed.",
+            f"Regenerated {n} {label} file(s) for prompt #{task.prompt.id} — "
+            f"select it in the {viewer} tab to Export or Promote.",
             'success'
         )
         messagebox.showinfo(
             "Regeneration Complete",
             f"Generated {n} {label} file(s) for prompt #{task.prompt.id}.\n\n"
-            f"• The file is now visible in the {'Images' if label == 'image' else 'Audio'} tab.\n"
-            f"• Use Export to save a copy elsewhere.\n"
-            f"• Use Promote to make it visible in the web app."
+            f"The file is now visible in the {viewer} tab.\n"
+            f"Select it there to use the Export or Promote buttons."
         )
 
-    def _export_history_artifact(self):
-        """Copy the last regenerated (or existing DB) artifact to a user-chosen location."""
-        import shutil
-        from tkinter import filedialog
-
-        # Determine which files to offer for export
-        artifacts = self.history_last_regen_artifacts
-        if not artifacts and self.history_selected_prompt:
-            artifacts = self.artifact_repo.get_artifacts_for_prompt(
-                self.history_selected_prompt.id)
-
-        if not artifacts:
-            messagebox.showwarning("No Artifact", "No file to export. Regenerate first.")
-            return
-
-        artifact = artifacts[0]  # Export the primary (first/only) artifact
-        output_root = self.config['comfyui']['output_directory']
-        src_path = os.path.join(output_root, artifact.file_path)
-
-        if not os.path.exists(src_path):
-            messagebox.showerror("File Not Found",
-                                 f"Source file not found:\n{src_path}")
-            return
-
-        # Determine file extension for the dialog filter
-        ext = os.path.splitext(src_path)[1].lower()  # e.g. '.wav', '.png'
-        if ext in ('.wav', '.mp3', '.flac'):
-            filetypes = [("Audio files", f"*{ext}"), ("All files", "*.*")]
-        else:
-            filetypes = [("Image files", f"*{ext}"), ("All files", "*.*")]
-
-        dest_path = filedialog.asksaveasfilename(
-            title="Export artifact to…",
-            defaultextension=ext,
-            initialfile=os.path.basename(src_path),
-            filetypes=filetypes,
-        )
-
-        if not dest_path:
-            return  # User cancelled
-
-        try:
-            shutil.copy2(src_path, dest_path)
-            self.update_status(f"Exported to {dest_path}", 'success')
-            messagebox.showinfo("Export Complete",
-                                f"File saved to:\n{dest_path}")
-        except Exception as e:
-            messagebox.showerror("Export Failed", str(e))
-
-    def _promote_history_artifact(self):
-        """Write the last sandbox-regenerated artifact into prompt_artifacts (makes it live)."""
-        if not self.history_last_regen_artifacts or not self.history_selected_prompt:
-            messagebox.showwarning("Nothing to Promote",
-                                   "Regenerate a prompt first, then Promote.")
-            return
-
-        prompt = self.history_selected_prompt
-        confirmed = messagebox.askyesno(
-            "Promote to Web App",
-            f"This will add the regenerated artifact for prompt #{prompt.id} "
-            f"to the database.\n\n"
-            f"The web app will serve the NEW file going forward.\n"
-            f"The original file remains on disk (not deleted).\n\n"
-            f"Continue?",
-        )
-        if not confirmed:
-            return
-
-        try:
-            promoted = list(self.history_last_regen_artifacts)
-            for artifact in promoted:
-                self.artifact_repo.promote_artifact(prompt.id, artifact)
-
-            # Clear regen state — artifact is now in DB
-            self.history_last_regen_artifacts = []
-            self._load_history()
-            self._update_history_buttons()
-
-            self.update_status(
-                f"Promoted {len(promoted)} artifact(s) for prompt #{prompt.id} "
-                f"— web app will now serve the new file.",
-                'success'
-            )
-            messagebox.showinfo(
-                "Promoted",
-                f"Artifact for prompt #{prompt.id} is now live in the database.\n"
-                f"The web browse page will serve the regenerated file."
-            )
-        except Exception as e:
-            messagebox.showerror("Promote Failed", str(e))
 
     # ─────────────────────────────────────────────────────────────────────────
 
