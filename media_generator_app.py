@@ -247,13 +247,16 @@ class SplashScreen:
 
 class GenerationTask:
     """Represents a single generation task"""
-    def __init__(self, task_id, prompt_type, prompt, total_in_batch, position_in_batch, audio_params=None):
+    def __init__(self, task_id, prompt_type, prompt, total_in_batch, position_in_batch,
+                 audio_params=None, is_regen=False):
         self.task_id = task_id
         self.prompt_type = prompt_type
         self.prompt = prompt
         self.total_in_batch = total_in_batch
         self.position_in_batch = position_in_batch
         self.audio_params = audio_params  # Optional dict of ACE 1.5 generation params
+        self.is_regen = is_regen          # If True: run executor but skip all DB writes
+        self.regen_artifacts = []         # Populated by worker on successful regen
 
 
 class MediaGeneratorApp:
@@ -281,6 +284,11 @@ class MediaGeneratorApp:
         # State
         self.selected_prompt: Optional[PromptRecord] = None
         self.selected_prompt_type: Optional[str] = None  # 'image_prompt' or 'lyrics_prompt'
+
+        # History tab state
+        self.history_selected_prompt: Optional[PromptRecord] = None
+        self.history_selected_type: Optional[str] = None
+        self.history_last_regen_artifacts: list = []   # ArtifactRecords from last regen (not in DB)
 
         # Create or use existing main window
         self.root = root if root is not None else tk.Tk()
@@ -452,6 +460,9 @@ class MediaGeneratorApp:
 
         # Tab 3: Audio Gallery
         self._create_audio_gallery_tab()
+
+        # Tab 4: History & Regeneration
+        self._create_history_tab()
 
     def _create_status_display(self):
         """Create enhanced status display at top of window"""
@@ -1218,10 +1229,18 @@ class MediaGeneratorApp:
 
                 try:
                     # Perform generation (blocking subprocess is OK here)
-                    if task.prompt_type == 'image_prompt':
-                        self._generate_image_prompt_silent(task.prompt)
-                    elif task.prompt_type == 'lyrics_prompt':
-                        self._generate_lyrics_prompt_silent(task.prompt, audio_params=task.audio_params)
+                    if task.is_regen:
+                        # Sandbox regen: run executor only, no DB writes
+                        if task.prompt_type == 'image_prompt':
+                            task.regen_artifacts = self._regen_image_silent(task.prompt)
+                        elif task.prompt_type == 'lyrics_prompt':
+                            task.regen_artifacts = self._regen_lyrics_silent(
+                                task.prompt, audio_params=task.audio_params)
+                    else:
+                        if task.prompt_type == 'image_prompt':
+                            self._generate_image_prompt_silent(task.prompt)
+                        elif task.prompt_type == 'lyrics_prompt':
+                            self._generate_lyrics_prompt_silent(task.prompt, audio_params=task.audio_params)
 
                     # Success - schedule UI update
                     self.root.after(0, self._on_task_success, task)
@@ -1251,6 +1270,16 @@ class MediaGeneratorApp:
         """Handle successful task (called on main thread)"""
         self.current_batch_success += 1
 
+        if task.is_regen:
+            # Sandbox regen: special completion handler, then release generating lock
+            self.is_generating = False
+            self.generate_button.config(state=tk.NORMAL)
+            self.current_batch_total = 0
+            self.current_batch_success = 0
+            self.current_batch_errors = 0
+            self._on_regen_complete(task)
+            return
+
         if (self.current_batch_success + self.current_batch_errors) >= self.current_batch_total:
             self._on_batch_complete()
 
@@ -1258,6 +1287,18 @@ class MediaGeneratorApp:
         """Handle task error (called on main thread)"""
         self.current_batch_errors += 1
         print(f"Generation error for prompt #{task.prompt.id}: {error_msg}")
+
+        if task.is_regen:
+            # Sandbox regen error: release lock, show message, don't touch DB
+            self.is_generating = False
+            self.generate_button.config(state=tk.NORMAL)
+            self.current_batch_total = 0
+            self.current_batch_success = 0
+            self.current_batch_errors = 0
+            self._update_history_buttons()
+            self.update_status(f"Regen error: {error_msg[:80]}", 'error')
+            messagebox.showerror("Regeneration Failed", error_msg)
+            return
 
         try:
             self.prompt_repo.update_artifact_status(task.prompt.id, 'error', error_msg[:2000])
@@ -1275,6 +1316,9 @@ class MediaGeneratorApp:
         self.refresh_unified_list()
         self.image_gallery.load_images()
         self.audio_player.load_playlist()
+        # Refresh history artifact counts too
+        if hasattr(self, 'history_tree'):
+            self._load_history()
 
         # Re-enable button
         self.generate_button.config(state=tk.NORMAL)
@@ -1520,6 +1564,462 @@ class MediaGeneratorApp:
             f"ComfyUI: {self.config['comfyui']['comfyui_directory']}\n\n"
             "Built with Python & Tkinter"
         )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # HISTORY TAB
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _create_history_tab(self):
+        """Create Tab 4: History & Regeneration"""
+        tab4 = tk.Frame(self.main_notebook, bg=COLORS['bg_panel'])
+        self.main_notebook.add(tab4, text="🔁 History")
+
+        # ── Button bar (pack FIRST so it anchors to the bottom) ──────────────
+        btn_frame = tk.Frame(tab4, bg=COLORS['bg_secondary'], height=55)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+        btn_frame.pack_propagate(False)
+
+        self.history_regen_btn = tk.Button(
+            btn_frame, text="🔁 Regenerate Selected",
+            command=self._regenerate_history_selected,
+            bg=COLORS['accent_solar'], fg=COLORS['text_primary'],
+            font=('Helvetica Neue', 11, 'bold'),
+            relief=tk.FLAT, bd=0, highlightthickness=0,
+            padx=20, pady=10, cursor='hand2', state=tk.DISABLED,
+        )
+        self.history_regen_btn.pack(side=tk.LEFT, padx=(10, 5), pady=8)
+
+        self.history_export_btn = tk.Button(
+            btn_frame, text="💾 Export...",
+            command=self._export_history_artifact,
+            bg=COLORS['bg_light'], fg=COLORS['text_primary'],
+            font=('Helvetica Neue', 11),
+            relief=tk.FLAT, bd=0, highlightthickness=0,
+            padx=16, pady=10, cursor='hand2', state=tk.DISABLED,
+        )
+        self.history_export_btn.pack(side=tk.LEFT, padx=5, pady=8)
+
+        self.history_promote_btn = tk.Button(
+            btn_frame, text="⬆ Promote to Web",
+            command=self._promote_history_artifact,
+            bg=COLORS['accent_warm'], fg=COLORS['text_primary'],
+            font=('Helvetica Neue', 11),
+            relief=tk.FLAT, bd=0, highlightthickness=0,
+            padx=16, pady=10, cursor='hand2', state=tk.DISABLED,
+        )
+        self.history_promote_btn.pack(side=tk.LEFT, padx=5, pady=8)
+
+        # Promote tooltip note
+        tk.Label(
+            btn_frame,
+            text="Promote writes to DB so the web app can serve it",
+            bg=COLORS['bg_secondary'], fg=COLORS['text_light'],
+            font=('Helvetica Neue', 9),
+        ).pack(side=tk.LEFT, padx=10)
+
+        # ── Vertical split: list (top) + details (bottom) ────────────────────
+        history_paned = tk.PanedWindow(
+            tab4, orient=tk.VERTICAL,
+            sashrelief=tk.FLAT, bg=COLORS['bg_primary'],
+            sashwidth=4, bd=0,
+        )
+        history_paned.pack(fill=tk.BOTH, expand=True)
+
+        # ── TOP: filter bar + treeview ───────────────────────────────────────
+        list_section = tk.Frame(history_paned, bg=COLORS['bg_primary'])
+
+        # Filter bar
+        filter_frame = tk.Frame(list_section, bg=COLORS['bg_secondary'], height=40)
+        filter_frame.pack(fill=tk.X, padx=5, pady=5)
+        filter_frame.pack_propagate(False)
+
+        tk.Label(filter_frame, text="Show:", bg=COLORS['bg_secondary'],
+                 fg=COLORS['text_light'],
+                 font=('Helvetica Neue', 11, 'bold')).pack(side=tk.LEFT, padx=(10, 5))
+
+        self.history_filter_var = tk.StringVar(value="All")
+        ttk.Combobox(
+            filter_frame, textvariable=self.history_filter_var,
+            values=["All", "Images", "Audio"],
+            state='readonly', width=10,
+            style='Solarpunk.TCombobox',
+        ).pack(side=tk.LEFT, padx=5)
+        self.history_filter_var.trace_add('write', lambda *_: self._load_history())
+
+        tk.Button(
+            filter_frame, text="Refresh", command=self._load_history,
+            bg=COLORS['bg_secondary'], fg=COLORS['text_light'],
+            font=('Helvetica Neue', 10), relief=tk.FLAT, bd=0,
+            highlightthickness=0, padx=15, pady=5, cursor='hand2',
+        ).pack(side=tk.RIGHT, padx=10)
+
+        tk.Label(
+            filter_frame,
+            text="Audio params (key, BPM…) are read from the ⚙ Prompts → Audio Params tab",
+            bg=COLORS['bg_secondary'], fg=COLORS['text_light'],
+            font=('Helvetica Neue', 9),
+        ).pack(side=tk.RIGHT, padx=10)
+
+        # Treeview
+        tree_frame = ttk.LabelFrame(list_section, text="All Past Prompts",
+                                    style='Solarpunk.TLabelframe')
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+
+        self.history_tree = ttk.Treeview(
+            tree_frame,
+            columns=('icon', 'type', 'id', 'title', 'created', 'status', 'artifacts'),
+            show='headings', selectmode='browse',
+            style='Solarpunk.Treeview',
+        )
+        self.history_tree.heading('icon',      text='')
+        self.history_tree.heading('type',      text='Type')
+        self.history_tree.heading('id',        text='ID')
+        self.history_tree.heading('title',     text='Title / Preview')
+        self.history_tree.heading('created',   text='Created')
+        self.history_tree.heading('status',    text='Status')
+        self.history_tree.heading('artifacts', text='Artifacts')
+
+        self.history_tree.column('icon',      width=36,  anchor='center', stretch=False)
+        self.history_tree.column('type',      width=70,  anchor='w',      stretch=False)
+        self.history_tree.column('id',        width=55,  anchor='center', stretch=False)
+        self.history_tree.column('title',     width=340, anchor='w')
+        self.history_tree.column('created',   width=140, anchor='w',      stretch=False)
+        self.history_tree.column('status',    width=100, anchor='center', stretch=False)
+        self.history_tree.column('artifacts', width=72,  anchor='center', stretch=False)
+
+        h_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL,
+                                  command=self.history_tree.yview,
+                                  style='Solarpunk.Vertical.TScrollbar')
+        self.history_tree.configure(yscrollcommand=h_scroll.set)
+        self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        h_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.history_tree.bind('<<TreeviewSelect>>', self._on_history_select)
+
+        history_paned.add(list_section, minsize=200)
+
+        # ── BOTTOM: JSON details ─────────────────────────────────────────────
+        details_section = tk.Frame(history_paned, bg=COLORS['bg_primary'])
+
+        details_lf = ttk.LabelFrame(details_section, text="Prompt Details (JSON)",
+                                     style='Solarpunk.TLabelframe')
+        details_lf.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.history_details_text = scrolledtext.ScrolledText(
+            details_lf, wrap=tk.WORD, font=('Consolas', 11),
+            bg=COLORS['bg_panel'], fg=COLORS['text_primary'],
+            insertbackground=COLORS['accent_solar'],
+            selectbackground=COLORS['selected'],
+            selectforeground=COLORS['text_primary'],
+            borderwidth=0, highlightthickness=0, padx=10, pady=10,
+        )
+        self.history_details_text.pack(fill=tk.BOTH, expand=True)
+
+        history_paned.add(details_section, minsize=120)
+
+        # Initial load
+        self._load_history()
+
+    # ── Status label helpers ──────────────────────────────────────────────────
+    _STATUS_LABELS = {
+        'ready':      '✓ Ready',
+        'pending':    '⏳ Pending',
+        'error':      '✗ Error',
+        'processing': '⟳ Processing',
+    }
+
+    def _load_history(self):
+        """Reload history treeview from database"""
+        if not hasattr(self, 'history_tree'):
+            return
+
+        self.history_tree.delete(*self.history_tree.get_children())
+
+        fval = self.history_filter_var.get()
+        type_filter = None
+        if fval == 'Images':
+            type_filter = 'image_prompt'
+        elif fval == 'Audio':
+            type_filter = 'lyrics_prompt'
+
+        try:
+            prompts = self.prompt_repo.get_all_media_prompts(type_filter=type_filter)
+        except Exception as e:
+            print(f"History load error: {e}")
+            return
+
+        for prompt in prompts:
+            icon = self.ICON_MAP.get(prompt.prompt_type, '?')
+            type_label = 'Image' if prompt.prompt_type == 'image_prompt' else 'Audio'
+            artifact_count = getattr(prompt, '_artifact_count', 0)
+
+            # Title from JSON content
+            json_data = prompt.get_json_prompt()
+            if prompt.prompt_type == 'image_prompt':
+                raw = json_data.get('prompt', prompt.prompt_text or '')
+                title = (raw[:60] + '…') if len(raw) > 60 else raw
+            else:
+                title = json_data.get('title', prompt.prompt_text or '(Untitled)')
+
+            status_label = self._STATUS_LABELS.get(prompt.artifact_status,
+                                                    prompt.artifact_status)
+
+            iid = f"hist_{prompt.prompt_type}_{prompt.id}"
+            self.history_tree.insert('', 'end', iid=iid, values=(
+                icon, type_label, prompt.id, title,
+                prompt.created_at.strftime('%Y-%m-%d %H:%M'),
+                status_label, artifact_count,
+            ))
+
+    def _on_history_select(self, event):
+        """Handle row selection in history treeview"""
+        selections = self.history_tree.selection()
+        if not selections:
+            self.history_selected_prompt = None
+            self.history_selected_type = None
+            self.history_last_regen_artifacts = []
+            self._update_history_buttons()
+            return
+
+        iid = selections[0]
+        # iid format: "hist_{prompt_type}_{id}"
+        parts = iid.split('_')
+        # parts[0]='hist', parts[1]=type_word, parts[2]=type_word2(if lyrics), parts[-1]=id
+        prompt_id = int(parts[-1])
+        prompt_type = '_'.join(parts[1:-1])  # 'image_prompt' or 'lyrics_prompt'
+
+        try:
+            prompts = self.prompt_repo.get_all_media_prompts(type_filter=prompt_type)
+            prompt = next((p for p in prompts if p.id == prompt_id), None)
+        except Exception as e:
+            print(f"History select error: {e}")
+            return
+
+        if not prompt:
+            return
+
+        # If the user picks a different prompt, clear any pending regen artifacts
+        if (self.history_selected_prompt is None or
+                self.history_selected_prompt.id != prompt_id):
+            self.history_last_regen_artifacts = []
+
+        self.history_selected_prompt = prompt
+        self.history_selected_type = prompt_type
+
+        # Show JSON details
+        self.history_details_text.delete('1.0', tk.END)
+        json_data = prompt.get_json_prompt()
+        self.history_details_text.insert('1.0', json.dumps(json_data, indent=2))
+
+        # Pre-fill shared audio params when a lyrics prompt is selected
+        if prompt_type == 'lyrics_prompt':
+            self._populate_audio_params_from_prompt(json_data)
+
+        self._update_history_buttons()
+
+    def _update_history_buttons(self):
+        """Enable/disable History tab buttons based on current state"""
+        has_selection = self.history_selected_prompt is not None
+        has_regen = len(self.history_last_regen_artifacts) > 0
+
+        self.history_regen_btn.config(
+            state=tk.NORMAL if (has_selection and not self.is_generating) else tk.DISABLED
+        )
+        # Export: available after a regen OR if the prompt already has DB artifacts
+        can_export = has_regen
+        if not can_export and has_selection:
+            existing = self.artifact_repo.get_artifacts_for_prompt(
+                self.history_selected_prompt.id)
+            can_export = len(existing) > 0
+        self.history_export_btn.config(
+            state=tk.NORMAL if can_export else tk.DISABLED
+        )
+        # Promote: only available after a sandbox regen (not yet in DB)
+        self.history_promote_btn.config(
+            state=tk.NORMAL if has_regen else tk.DISABLED
+        )
+
+    def _regenerate_history_selected(self):
+        """Queue the selected history prompt for sandbox regeneration (no DB write)"""
+        if not self.history_selected_prompt:
+            return
+        if self.is_generating:
+            messagebox.showinfo("Busy", "Please wait for current generation to complete.")
+            return
+
+        prompt = self.history_selected_prompt
+        prompt_type = self.history_selected_type
+
+        self.is_generating = True
+        self.current_batch_total = 1
+        self.current_batch_success = 0
+        self.current_batch_errors = 0
+
+        audio_params = self._get_audio_params() if prompt_type == 'lyrics_prompt' else None
+
+        task = GenerationTask(
+            task_id=1,
+            prompt_type=prompt_type,
+            prompt=prompt,
+            total_in_batch=1,
+            position_in_batch=1,
+            audio_params=audio_params,
+            is_regen=True,
+        )
+        self.task_queue.put(task)
+
+        label = 'image' if prompt_type == 'image_prompt' else 'audio'
+        self.update_status(
+            f"Regenerating {label} for prompt #{prompt.id} (sandbox — no DB write)…",
+            'processing'
+        )
+        self.history_regen_btn.config(state=tk.DISABLED)
+
+    def _regen_image_silent(self, prompt: PromptRecord) -> list:
+        """Run image executor without touching the database.
+
+        Returns list of ArtifactRecord objects for the generated files.
+        """
+        json_data = ImagePromptData.from_json(prompt.get_json_prompt())
+        executor = ImageWorkflowExecutor(self.config)
+        return executor.generate(prompt, json_data, progress_callback=lambda msg: None)
+
+    def _regen_lyrics_silent(self, prompt: PromptRecord, audio_params: dict = None) -> list:
+        """Run audio executor without touching the database.
+
+        Returns list of ArtifactRecord objects for the generated files.
+        """
+        json_data = LyricsPromptData.from_json(prompt.get_json_prompt())
+        executor = AudioWorkflowExecutor(self.config)
+        return executor.generate(
+            prompt, json_data,
+            progress_callback=lambda msg: None,
+            audio_params=audio_params,
+        )
+
+    def _on_regen_complete(self, task: GenerationTask):
+        """Called on main thread after a successful sandbox regen task."""
+        self.history_last_regen_artifacts = task.regen_artifacts
+
+        # Refresh gallery viewers so the new file appears immediately
+        if task.prompt_type == 'image_prompt':
+            self.image_gallery.load_images()
+            self.main_notebook.select(1)   # Switch to Images tab
+        else:
+            self.audio_player.load_playlist()
+            self.main_notebook.select(2)   # Switch to Audio tab
+
+        # Refresh history artifact count (the file exists on disk but not in DB yet)
+        self._load_history()
+        self._update_history_buttons()
+
+        label = 'image' if task.prompt_type == 'image_prompt' else 'audio'
+        n = len(task.regen_artifacts)
+        self.update_status(
+            f"Regenerated {n} {label} file(s) for prompt #{task.prompt.id} "
+            f"— visible in viewer tab. Use Export or Promote as needed.",
+            'success'
+        )
+        messagebox.showinfo(
+            "Regeneration Complete",
+            f"Generated {n} {label} file(s) for prompt #{task.prompt.id}.\n\n"
+            f"• The file is now visible in the {'Images' if label == 'image' else 'Audio'} tab.\n"
+            f"• Use Export to save a copy elsewhere.\n"
+            f"• Use Promote to make it visible in the web app."
+        )
+
+    def _export_history_artifact(self):
+        """Copy the last regenerated (or existing DB) artifact to a user-chosen location."""
+        import shutil
+        from tkinter import filedialog
+
+        # Determine which files to offer for export
+        artifacts = self.history_last_regen_artifacts
+        if not artifacts and self.history_selected_prompt:
+            artifacts = self.artifact_repo.get_artifacts_for_prompt(
+                self.history_selected_prompt.id)
+
+        if not artifacts:
+            messagebox.showwarning("No Artifact", "No file to export. Regenerate first.")
+            return
+
+        artifact = artifacts[0]  # Export the primary (first/only) artifact
+        output_root = self.config['comfyui']['output_directory']
+        src_path = os.path.join(output_root, artifact.file_path)
+
+        if not os.path.exists(src_path):
+            messagebox.showerror("File Not Found",
+                                 f"Source file not found:\n{src_path}")
+            return
+
+        # Determine file extension for the dialog filter
+        ext = os.path.splitext(src_path)[1].lower()  # e.g. '.wav', '.png'
+        if ext in ('.wav', '.mp3', '.flac'):
+            filetypes = [("Audio files", f"*{ext}"), ("All files", "*.*")]
+        else:
+            filetypes = [("Image files", f"*{ext}"), ("All files", "*.*")]
+
+        dest_path = filedialog.asksaveasfilename(
+            title="Export artifact to…",
+            defaultextension=ext,
+            initialfile=os.path.basename(src_path),
+            filetypes=filetypes,
+        )
+
+        if not dest_path:
+            return  # User cancelled
+
+        try:
+            shutil.copy2(src_path, dest_path)
+            self.update_status(f"Exported to {dest_path}", 'success')
+            messagebox.showinfo("Export Complete",
+                                f"File saved to:\n{dest_path}")
+        except Exception as e:
+            messagebox.showerror("Export Failed", str(e))
+
+    def _promote_history_artifact(self):
+        """Write the last sandbox-regenerated artifact into prompt_artifacts (makes it live)."""
+        if not self.history_last_regen_artifacts or not self.history_selected_prompt:
+            messagebox.showwarning("Nothing to Promote",
+                                   "Regenerate a prompt first, then Promote.")
+            return
+
+        prompt = self.history_selected_prompt
+        confirmed = messagebox.askyesno(
+            "Promote to Web App",
+            f"This will add the regenerated artifact for prompt #{prompt.id} "
+            f"to the database.\n\n"
+            f"The web app will serve the NEW file going forward.\n"
+            f"The original file remains on disk (not deleted).\n\n"
+            f"Continue?",
+        )
+        if not confirmed:
+            return
+
+        try:
+            promoted = list(self.history_last_regen_artifacts)
+            for artifact in promoted:
+                self.artifact_repo.promote_artifact(prompt.id, artifact)
+
+            # Clear regen state — artifact is now in DB
+            self.history_last_regen_artifacts = []
+            self._load_history()
+            self._update_history_buttons()
+
+            self.update_status(
+                f"Promoted {len(promoted)} artifact(s) for prompt #{prompt.id} "
+                f"— web app will now serve the new file.",
+                'success'
+            )
+            messagebox.showinfo(
+                "Promoted",
+                f"Artifact for prompt #{prompt.id} is now live in the database.\n"
+                f"The web browse page will serve the regenerated file."
+            )
+        except Exception as e:
+            messagebox.showerror("Promote Failed", str(e))
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     def run(self):
         """Start application main loop"""

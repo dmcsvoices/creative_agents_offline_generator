@@ -366,6 +366,107 @@ class PromptRepository:
                 # Non-critical operation - log but don't fail
                 pass
 
+    def get_all_media_prompts(
+        self,
+        type_filter: Optional[str] = None,
+        limit: int = 500
+    ) -> List[PromptRecord]:
+        """Query all image_prompt and lyrics_prompt entries regardless of artifact status.
+
+        Used by the History tab to list every past prompt available for regeneration.
+        Each returned PromptRecord has a synthetic _artifact_count attribute set.
+
+        Args:
+            type_filter: Optional 'image_prompt' or 'lyrics_prompt' to narrow results
+            limit: Maximum rows to return
+
+        Returns:
+            List of PromptRecord objects sorted newest-first, writings populated
+        """
+        if type_filter:
+            type_clause = "AND p.prompt_type = ?"
+            params: list = [type_filter, limit]
+        else:
+            type_clause = "AND p.prompt_type IN ('image_prompt', 'lyrics_prompt')"
+            params = [limit]
+
+        prompt_query = f"""
+        SELECT
+            p.id,
+            p.prompt_text,
+            p.prompt_type,
+            p.status,
+            p.artifact_status,
+            p.output_reference,
+            p.created_at,
+            p.completed_at,
+            p.error_message,
+            COUNT(pa.id) AS artifact_count
+        FROM prompts p
+        LEFT JOIN prompt_artifacts pa ON pa.prompt_id = p.id
+        WHERE 1=1 {type_clause}
+        GROUP BY p.id
+        ORDER BY p.created_at DESC
+        LIMIT ?
+        """
+
+        writings_query = """
+        SELECT pw.writing_id, pw.writing_order, w.content, w.content_type, w.title
+        FROM prompt_writings pw
+        JOIN writings w ON pw.writing_id = w.id
+        WHERE pw.prompt_id = ?
+          AND w.content_type IN ('image_prompt', 'lyrics_prompt')
+        ORDER BY pw.writing_order ASC
+        """
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except sqlite3.Error:
+                pass
+
+            cursor.execute(prompt_query, params)
+            prompt_rows = cursor.fetchall()
+
+            results = []
+            for row in prompt_rows:
+                prompt_id = row['id']
+
+                cursor.execute(writings_query, (prompt_id,))
+                writing_rows = cursor.fetchall()
+
+                writings = [
+                    {
+                        'writing_id': w['writing_id'],
+                        'writing_order': w['writing_order'],
+                        'content': w['content'],
+                        'content_type': w['content_type'],
+                        'title': w['title'],
+                    }
+                    for w in writing_rows
+                ]
+
+                record = PromptRecord(
+                    id=row['id'],
+                    prompt_text=row['prompt_text'],
+                    prompt_type=row['prompt_type'],
+                    status=row['status'],
+                    artifact_status=row['artifact_status'],
+                    output_reference=row['output_reference'],
+                    created_at=self._parse_datetime(row['created_at']),
+                    completed_at=self._parse_datetime(row['completed_at']) if row['completed_at'] else None,
+                    error_message=row['error_message'],
+                    writings=writings,
+                    writing_id=writings[0]['writing_id'] if writings else None,
+                    json_content=writings[0]['content'] if writings else None,
+                )
+                # Attach artifact count for History tab display (not part of dataclass)
+                record._artifact_count = row['artifact_count']
+                results.append(record)
+
+            return results
+
     def reset_stale_processing_prompts(self, timeout_minutes: int = 30) -> int:
         """
         Reset prompts stuck in 'processing' status back to 'pending'.
@@ -575,6 +676,47 @@ class ArtifactRepository:
         # Checkpoint after successful transaction
         from db_utils import force_wal_checkpoint
         force_wal_checkpoint(self.db_path, mode="RESTART")
+
+    def promote_artifact(self, prompt_id: int, artifact: ArtifactRecord) -> int:
+        """Insert a regenerated artifact into prompt_artifacts and mark prompt ready.
+
+        Called by the History tab Promote button to make a sandbox-regenerated file
+        visible to the web app without disturbing the original artifact records.
+
+        Args:
+            prompt_id: The prompt whose artifact is being promoted
+            artifact: ArtifactRecord produced by the executor (file_path is relative)
+
+        Returns:
+            ID of the newly inserted prompt_artifacts row
+        """
+        from db_utils import db_transaction, force_wal_checkpoint
+
+        with db_transaction(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT INTO prompt_artifacts (
+                    prompt_id, artifact_type, file_path, preview_path,
+                    metadata, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """, (
+                prompt_id,
+                artifact.artifact_type,
+                artifact.file_path,
+                artifact.preview_path,
+                json.dumps(artifact.metadata) if artifact.metadata else None,
+            ))
+
+            new_id = cursor.lastrowid
+
+            cursor.execute(
+                "UPDATE prompts SET artifact_status = 'ready' WHERE id = ?",
+                (prompt_id,)
+            )
+
+        force_wal_checkpoint(self.db_path, mode="RESTART")
+        return new_id
 
     def get_artifacts_for_prompt(self, prompt_id: int) -> List[ArtifactRecord]:
         """Get all artifacts for a specific prompt
