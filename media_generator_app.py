@@ -822,6 +822,73 @@ class MediaGeneratorApp:
         """Switch details notebook to the JSON tab."""
         self.details_notebook.select(0)
 
+    def _build_audio_params_widgets_only(self, parent):
+        """Build audio param widgets into *parent* using the already-existing self._ap_* vars.
+
+        Call this after _build_audio_params_panel() has already created the variables
+        (i.e. after _create_prompts_tab() has run).  Produces an identical grid so
+        both the Prompts tab and the History tab share the same underlying values.
+        """
+        inner = tk.Frame(parent, bg=COLORS['bg_primary'])
+        inner.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
+
+        lbl_kw = dict(bg=COLORS['bg_primary'], fg=COLORS['text_light'],
+                      font=('Helvetica Neue', 10), anchor='e')
+        spinbox_kw = dict(bg=COLORS['bg_panel'], fg=COLORS['text_primary'],
+                          relief=tk.FLAT, highlightthickness=1,
+                          highlightbackground=COLORS['border'],
+                          font=('Helvetica Neue', 10), width=7)
+        combo_kw = dict(style='Solarpunk.TCombobox', state='normal')
+
+        def lbl(row, col, text):
+            tk.Label(inner, text=text, **lbl_kw).grid(
+                row=row, column=col, sticky='e', padx=(10, 4), pady=4)
+
+        def spinbox(row, col, var, lo, hi, inc=1, fmt=None):
+            kw = dict(textvariable=var, from_=lo, to=hi, increment=inc, **spinbox_kw)
+            if fmt:
+                kw['format'] = fmt
+            tk.Spinbox(inner, **kw).grid(row=row, column=col, sticky='w', padx=(0, 8))
+
+        lbl(0, 0, 'BPM:');       spinbox(0, 1, self._ap_bpm, 40, 320)
+        lbl(0, 2, 'Duration (s):'); spinbox(0, 3, self._ap_duration, 15, 300)
+
+        lbl(1, 0, 'Key / Scale:')
+        ttk.Combobox(inner, textvariable=self._ap_keyscale, width=14,
+                     values=self._KEY_SCALE_OPTIONS, **combo_kw).grid(
+            row=1, column=1, sticky='w', padx=(0, 8), pady=4)
+
+        lbl(1, 2, 'Time Signature:')
+        ttk.Combobox(inner, textvariable=self._ap_timesig, width=5,
+                     values=['3', '4', '6', '12'], state='readonly',
+                     style='Solarpunk.TCombobox').grid(
+            row=1, column=3, sticky='w', padx=(0, 8), pady=4)
+
+        lbl(2, 0, 'CFG Scale:');  spinbox(2, 1, self._ap_cfg_scale, 0.5, 15.0, inc=0.5, fmt='%4.1f')
+        lbl(2, 2, 'Language:')
+        ttk.Combobox(inner, textvariable=self._ap_language, width=5,
+                     values=['en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'pt', 'ru'],
+                     state='readonly', style='Solarpunk.TCombobox').grid(
+            row=2, column=3, sticky='w', padx=(0, 8), pady=4)
+
+        lbl(3, 0, 'Temperature:'); spinbox(3, 1, self._ap_temperature, 0.05, 2.0, inc=0.05, fmt='%4.2f')
+        lbl(3, 2, 'Top P:');       spinbox(3, 3, self._ap_top_p, 0.0, 1.0, inc=0.05, fmt='%4.2f')
+        lbl(4, 0, 'Top K:');       spinbox(4, 1, self._ap_top_k, 0, 500)
+        lbl(4, 2, 'Min P:');       spinbox(4, 3, self._ap_min_p, 0.0, 1.0, inc=0.05, fmt='%4.2f')
+
+        tk.Button(
+            inner, text='Reset Defaults',
+            command=self._reset_audio_params,
+            bg=COLORS['bg_secondary'], fg=COLORS['text_light'],
+            font=('Helvetica Neue', 9), relief=tk.FLAT,
+            bd=0, highlightthickness=0, padx=12, pady=3, cursor='hand2',
+        ).grid(row=5, column=0, columnspan=4, pady=(6, 2))
+
+        inner.columnconfigure(0, weight=0, minsize=110)
+        inner.columnconfigure(1, weight=1)
+        inner.columnconfigure(2, weight=0, minsize=120)
+        inner.columnconfigure(3, weight=1)
+
     def _reset_audio_params(self):
         """Restore all audio param widgets to their factory defaults."""
         d = self._AUDIO_DEFAULTS
@@ -1698,15 +1765,19 @@ class MediaGeneratorApp:
 
         history_paned.add(list_section, minsize=200)
 
-        # ── BOTTOM: JSON details ─────────────────────────────────────────────
+        # ── BOTTOM: Details notebook (JSON + Audio Params) ───────────────────
         details_section = tk.Frame(history_paned, bg=COLORS['bg_primary'])
 
-        details_lf = ttk.LabelFrame(details_section, text="Prompt Details (JSON)",
-                                     style='Solarpunk.TLabelframe')
-        details_lf.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.history_details_notebook = ttk.Notebook(
+            details_section, style='Solarpunk.TNotebook')
+        self.history_details_notebook.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        # Tab 0: JSON viewer
+        json_tab = tk.Frame(self.history_details_notebook, bg=COLORS['bg_panel'])
+        self.history_details_notebook.add(json_tab, text="  Details (JSON)  ")
 
         self.history_details_text = scrolledtext.ScrolledText(
-            details_lf, wrap=tk.WORD, font=('Consolas', 11),
+            json_tab, wrap=tk.WORD, font=('Consolas', 11),
             bg=COLORS['bg_panel'], fg=COLORS['text_primary'],
             insertbackground=COLORS['accent_solar'],
             selectbackground=COLORS['selected'],
@@ -1715,7 +1786,12 @@ class MediaGeneratorApp:
         )
         self.history_details_text.pack(fill=tk.BOTH, expand=True)
 
-        history_paned.add(details_section, minsize=120)
+        # Tab 1: Audio params — reuses the shared self._ap_* variables
+        audio_tab = tk.Frame(self.history_details_notebook, bg=COLORS['bg_primary'])
+        self.history_details_notebook.add(audio_tab, text="  Audio Params (ACE 1.5)  ")
+        self._build_audio_params_widgets_only(audio_tab)
+
+        history_paned.add(details_section, minsize=180)
 
         # Initial load
         self._load_history()
@@ -1811,9 +1887,12 @@ class MediaGeneratorApp:
         json_data = prompt.get_json_prompt()
         self.history_details_text.insert('1.0', json.dumps(json_data, indent=2))
 
-        # Pre-fill shared audio params when a lyrics prompt is selected
+        # Pre-fill shared audio params and switch to the right details tab
         if prompt_type == 'lyrics_prompt':
             self._populate_audio_params_from_prompt(json_data)
+            self.history_details_notebook.select(1)   # Show Audio Params
+        else:
+            self.history_details_notebook.select(0)   # Show JSON only
 
         self._update_history_buttons()
 
